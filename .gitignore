@@ -1,0 +1,6 @@
+# Python 字节码缓存
+__pycache__/
+*.pyc
+
+# Claude Code 的本机设置（权限白名单等，因人而异）
+.claude/settings.local.json
