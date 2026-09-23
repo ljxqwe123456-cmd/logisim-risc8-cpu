@@ -53,10 +53,10 @@
   - 唯一例外是寄存器堆的写口用下降沿（R0-R15 的 `Trigger` 设 `Falling edge`，做法见 §2.1）。原因见 §2.1 与 §4.1。
 - 复位 `Rst`：PC ← 0；流水线寄存器清零（`ID/EX`/`EX/MEM`/`MEM/WB` 里装的是控制位，清 0 就是 NOP；`IF/ID` 里装的是指令字，清 0 是条 `ADD R0,R0,R0`，见 `isa.md` §10，但复位时全机状态同时清 0，它写回的仍是 0）；寄存器堆 R0-R15 ← 0；C ← 0；Output 寄存器（§2.8）← 0。
   - 寄存器堆也要复位。v2 里 R0 是普通寄存器，没有"恒 0"的硬连线，复位后它恰好是 0 是初值、不是性质；程序一旦写 R0 它就不再是 0。想让某个寄存器当零用，自己 `LDI`。
-- 停机取 `MEM/WB.Halt` 做全局时钟使能：`ClockEnable = !MEM/WB.Halt`。它 =0 时所有时序元件（PC、四级流水线寄存器、寄存器堆、C 标志、Output 寄存器）停止更新，PC 与 OUT 保持不变。
+- 停机取 `MEM/WB.Halt` 做全局时钟使能：`ClockEnable = !MEM/WB.Halt`。它 =0 时所有时序元件（PC、四级流水线寄存器、寄存器堆、C 标志、Output 寄存器、数据 RAM 的写）停止更新，PC 与 OUT 保持不变。
   - 必须在 `MEM/WB` 取，不能提前。HLT 前面那条指令（通常是程序最后一条 `OUT`）要走到自己的 WB 拍才写回；在 ID 段一译出 HLT 就冻住等于提前掐时钟，最后一条 `OUT` 的显示会丢。等 HLT 自己流到 `MEM/WB` 时，它前面的指令都已经写完了。
   - 不要把 `ClockEnable` 拿去门控 `Clk` 本身（`Clk && !Halt` 那种接法）：那会破坏"单一时钟"的约定，而且 Logisim 里门控时钟容易报振荡。把 `ClockEnable` 扇出到各元件自带的 Enable 脚即可。
-  - 各元件本来就有自己的使能条件，要和它相与：PC 是 `PCWrite && ClockEnable`，其余流水线寄存器是 `(各自的写使能) && ClockEnable`。
+  - 各元件本来就有自己的使能条件，要和它相与：PC 是 `PCWrite && ClockEnable`，其余流水线寄存器是 `(各自的写使能) && ClockEnable`，数据 RAM 是 `MemWrite && ClockEnable`。RAM 组件没有 `ClockEnable` 脚，这一项并进它的写使能即可——少了它，HLT 后面紧跟的那条 `ST`/`STA` 会在冻结的那一沿照样把数据写进 RAM（那时它在 MEM 段，是最后一个还没被冻住的写口）。
 - 数据 RAM 写在上升沿；ROM / RAM 读、寄存器堆读口都是组合逻辑（Logisim 默认）。
 
 ## 2. 各模块接口
@@ -196,11 +196,11 @@ Logisim 设置：Data Bit Width = 24，Address Bit Width = 8。右键 → Load I
 |---|---|---|
 | in | Address | 8 |
 | in | DataIn | 8 |
-| in | MemWrite | 1 |
+| in | MemWrite | 1 | 写使能。接 `MemWrite && ClockEnable`，不是裸的 `MemWrite`（§1） |
 | in | Clk | 1 |
 | out | DataOut | 8 |
 
-读为组合逻辑，写在上升沿且 MemWrite=1。**RAM 没有读使能脚**，所以 `MemRead` 不接它（见 `isa.md` §8）。
+读为组合逻辑，写在上升沿且写使能=1。**RAM 没有读使能脚**，所以 `MemRead` 不接它（见 `isa.md` §8）；也没有 `ClockEnable` 脚，停机要冻住它的写得自己与进写使能（§1）。
 
 ### 2.6 IF 段（PC + 增量器 + 目标选择）
 
@@ -244,7 +244,7 @@ Logisim 设置：Data Bit Width = 24，Address Bit Width = 8。右键 → Load I
 
 - `CWrite` 与 `BSrc` 只到 ID/EX。它们在 EX 段就消费掉了（写 C、选 `ALU.B`），不必往下传。
 - `BranchZ` / `BranchNZ` / `Jump` 三个要一路锁进 `ID/EX`：判零与跳转决定都在 EX 段做（§5.1），EX 段得知道"这条是不是跳、跳哪一种"。别想用现成的位凑——`JMP` 的 `BranchZ`/`BranchNZ` 都是 0，不单独带着 `Jump` 这一位就分不出它，于是 `JMP` 会变成一条什么都不做的指令。
-- 反过来说，另外 8 个控制位（`RegWrite`…`CWrite`）里只有 `CWrite` 与 `BSrc` 到 `ID/EX` 为止，其余要接着往下传，见下一条。
+- 反过来说，另外 8 个控制位（`RegWrite`…`BSrc`）里只有 `CWrite` 与 `BSrc` 到 `ID/EX` 为止，其余要接着往下传，见下一条。
 - `Halt` 恰好相反，必须一路锁存到 `MEM/WB`，因为停机是 WB 段才生效的（§1）。
 - `OutEn` 到 WB 段才生效，要传到底。
 
@@ -268,6 +268,8 @@ Logisim 设置：Data Bit Width = 24，Address Bit Width = 8。右键 → Load I
 #### 怎么把这些字段装进寄存器：分线器与位序
 
 51 位装不进一个寄存器（Logisim 的寄存器上限 32 位），所以 ID/EX 用两个 32 位寄存器拼：甲装三个数据字节，乙装 11 个控制位 + `ALUop` + 三个寄存器号。甲只用到低 24 位、乙只用到低 27 位，其余位接常量 0。切法落在字段边界上，数据字节全归一个，控制位与三个寄存器号全归另一个。
+
+两个寄存器都按 32 位接，而不是把甲设成 24 位、乙设成 27 位：Logisim 的寄存器宽度本来就能任意填，这两种都合法。留出余量是为了追加字段时不必重配寄存器与两个分线器——`BranchZ`/`BranchNZ`/`Jump` 三个位就是这么加进乙的空位里的，甲将来若补 `CALL` 要传的 `PC+1` 也正好还剩 8 位。代价只是上面说的那两段常量 0。
 
 位序本身是自由的，下面这张是本设计实际采用的那一种，照抄即可（括注是图纸上常用的短名）。
 
@@ -578,7 +580,7 @@ EX 段有两个 3 选 1 前递 mux，选择逻辑完全相同，只是被比较�
 判据是 `RegWrite`，不是"`rd` 是不是 0"：R0 是普通寄存器，`rd=0` 也可能是真的写 R0。写 R0 的指令也必须能把值前递出去——否则 `LDI R0,#5` 紧跟一条读 R0 的指令就会拿到旧值。两个 mux 与 §5.2 的 `dep` 一律改用 `RegWrite`。
 
 - 优先级 1 / 2 两个 mux 取的是同一个值：都是"前一条指令的 ALU 结果"。不要因为另一条路叫"写数据"就去取 `EX/MEM.WriteData`——那个字段是前一条指令自己要写进 RAM 的数据，不是它的运算结果，跟当前指令无关。
-- 优先级 1 排除 MemRead：load 的结果要到 MEM 之后才在 MEM/WB 可用，`EX/MEM.ALUResult` 是地址不是数据，故 load 只从 MEM/WB 前递（配合 load-use 停顿）。
+- 优先级 1 排除 MemRead：load 的结果要到 MEM 之后才在 MEM/WB 可用，`EX/MEM.ALUResult` 是地址不是数据，故 load 只从 MEM/WB 前递。停顿正常时这一项不会成为决定项：能命中它的那一拍（load 在 `EX/MEM`、真读者在 EX）往前推一拍，正是 load 在 `ID/EX`、读者在 `IF/ID`，也就是 §5.2 的 `dep` 必然命中、读者必被冻住的那一拍，这个配置到不了。但别删——省掉它，"漏停"就再也观察不到了：没停时优先级 1 会把地址顶上来，非零的地址让 `BZ` 不跳、顺落到下一条，而那时 load 已写回，读者读到的反而是正确值，`examples/hazard_loadbranch.asm` 会从判据变成假通过。
 - store 的写数据不需要自己的前递 mux：它取自 `A_mux_out` / `B_mux_out`（§3.6），store 要前递的那一份本来就在这两个 mux 的射程内——它们的比较字段 `[11:8]` / `[7:4]` 正是 store 数据源住的地方（§3.2）：
 
   ```
@@ -737,6 +739,8 @@ stall  = ID_EX.MemRead && dep
 
 `Inst[...]` 指 `IF/ID` 中当前那条指令（也就是读 Rd 的那条）的字段。两个字段就是两个读口的地址（§3.2），直接比较，不需要任何中间量。"写 Rd 的那条"一律用 `ID_EX.RegWrite` 判定——`rd` 每条指令都编码得出一个有意义的值，不能拿它当"不写"的标记。
 
+搭法：两个 4 位比较器（Logisim 的 `Comparator`，只留 `=` 输出）+ 1 个或门 + 2 个与门，纯组合，不含状态。比较器一个比 `ID_EX.rd` 与 `Inst[11:8]`、一个比 `ID_EX.rd` 与 `Inst[7:4]`；两个 `=` 相或得命中，再与 `ID_EX.RegWrite` 相与得 `dep`、再与 `ID_EX.MemRead` 相与得 `stall`。五个输入都是现成的散线，不用新切片：`ID_EX.rd[3:0]` 取乙 Q 端分线器的 Bit 1（起始位 4），`ID_EX.RegWrite` / `ID_EX.MemRead` 取 Bit 11 / Bit 10（位 23 / 22），`Inst[11:8]` 与 `Inst[7:4]` 取 `IF/ID` Q 端分线器——与两个读口地址、与写进 `ID_EX.rsA` / `rsB` 的是同两个抽头。比较的对象是 `IF/ID` 里的裸字段，不是 `ID_EX.rsA` / `rsB`：后者是正占着 EX 的那条的锁存副本，只有 §4 的前递 mux 用它，两组线接混了不报错，只会在该停的时候不停。
+
 `BZ`/`BNZ` 不在这条规则之外，也不在它之内：它们判零在 EX 段，写 Rd 的那条是 load 时照样吃这一格（§4.2 第二行）。本设计不需要任何"读到的是分支"的特判。
 
 为什么只能停、不能靠前递：load 的数据要到它自己走完 MEM 段才落进 `MEM/WB`（`EX/MEM.ALUResult` 是地址）。读 Rd 的那条在 EX 那一拍，写 Rd 的那条（这里是 load）刚走到 `EX/MEM`——优先级 1 被 `!EX/MEM.MemRead` 排除，优先级 2 的 `MEM/WB` 里装的还是更早的 i-2，两个源都够不着。停 1 拍后 load 进 `MEM/WB`，值就前递得过来了。症状见 §9 第 6 条；内置判据是 `examples/square_lookup.asm`（应输出 `9`，漏插气泡得 `0`）——load-use 的首选判据。`hazard_k3.asm` 的 `LDA R4,0x10` → `OUT R4` 同样考这一项，但它的 `0x00` 与 k=3 没修好同值，两种成因要一起查。
@@ -784,7 +788,7 @@ stall=1 时：`PCWrite=0`（PC 保持）、`IF_IDWrite=0`（IF/ID 保持）、`I
 
 为什么这一沿正好拦得住：`ID/EX` 的 D 端此刻挂着读 Rd 的那条（ID 段那条）的译码结果，Q 端是写 Rd 的那条（EX 段那条）——同一个寄存器两头装着两条不同指令的东西，这正是流水线寄存器在做的事，D 端的变化要等本拍末的沿才出现在 Q 端。停顿判定与译码是同一拍组合做出来的，不必提前一拍，它的作用点就是这一沿：D 端是照常送进去还是换成 0，由它定。
 
-清零怎么接：`ID/EX` 甲、乙两个寄存器的 D 端各加一个 2 选 1 mux，选择端 `stall \|\| branch_taken \|\| Jump`、选中时送常量 0——与 §6 给 `IF/ID` 加 flush mux 是同一个手法，两个寄存器的 `en` 都接常量 1（`en=0` 是保持，不是清零）。别用寄存器自带的 `clr` 脚：Logisim 的 `clr` 是异步清，`clr=1` 期间 Q 一直钉在 0、与时钟无关，而这两个信号都要持续整拍——写 Rd 的那条（正在 EX 的 load）或分支自己的控制信号会在这拍结束前就被抽走，`EX/MEM` 拍末锁到的是气泡，它自己的结果也跟着没了。mux 只在时钟沿把"这一拍本来要进 EX 的那条"换成 0；正占着 EX 的那条这一拍不受影响。
+清零怎么接：`ID/EX` 甲、乙两个寄存器的 D 端各加一个 2 选 1 mux，选择端 `stall \|\| branch_taken \|\| Jump`、选中时送常量 0——与 §6 给 `IF/ID` 加 flush mux 是同一个手法，两个寄存器的写使能项都是常量 1（气泡走 D 端 mux，不靠 `en=0` 保持），这一项再按 §1 与 `ClockEnable` 相与后接 `en` 脚——`en` 脚上不是裸的常量 1，否则停机冻不住这两个寄存器。别用寄存器自带的 `clr` 脚：Logisim 的 `clr` 是异步清，`clr=1` 期间 Q 一直钉在 0、与时钟无关，而这两个信号都要持续整拍——写 Rd 的那条（正在 EX 的 load）或分支自己的控制信号会在这拍结束前就被抽走，`EX/MEM` 拍末锁到的是气泡，它自己的结果也跟着没了。mux 只在时钟沿把"这一拍本来要进 EX 的那条"换成 0；正占着 EX 的那条这一拍不受影响。
 
 两个来源共用这一个 mux、却清的是两条不同的指令：`stall` 清掉的是读 Rd 的那条（它被冻在 `IF/ID` 里，下一拍还要重读寄存器堆再进来一次），`branch_taken`/`Jump` 清掉的是顺落的那条（它是被丢弃的，不会再来）。对 mux 来说没有区别，都是"这一拍不进 EX"。
 
@@ -792,7 +796,7 @@ stall=1 时：`PCWrite=0`（PC 保持）、`IF_IDWrite=0`（IF/ID 保持）、`I
 
 `RegWrite` 必须和控制位一起清 0：`stall` 的判据以它为前提，气泡若留着它，下一拍会误触发停顿。（`rd` 也顺带清 0，纯粹是卫生——判定已经不看它了。）`BranchZ` / `BranchNZ` / `Jump` 同样在清零范围里：漏清这三位，一个气泡会被 EX 段当成一条分支去判、去跳。
 
-为什么"控制位全 0"就等于 NOP：架构状态的每一处改变都由这 12 位里的某一位把门——`RegWrite` 写寄存器堆、`MemRead`/`MemWrite` 访存、`CWrite` 写 C、`OutEn` 写显示、`Halt` 停机。全 0 时一个门都不开，所以气泡不必是"一条合法指令"。照旧动作的只有 ALU（`ALUop` 被清成 `0000` = ADD，还可能吐无效进位），但它的结果没有接收方：两个前递 mux 都以 `RegWrite` 为命中条件（§4），一个 `RegWrite=0` 的 `ALUResult` 谁也取不走。漏清任何一位都会破坏这个性质，最狠的是 `Halt`——气泡一路流进 `MEM/WB` 后会把 `ClockEnable` 拉低，整机冻死（§1）。
+为什么"控制位全 0"就等于 NOP：架构状态的每一处改变都由这 11 个控制位里的某一位把门——`RegWrite` 写寄存器堆、`MemRead`/`MemWrite` 访存、`CWrite` 写 C、`OutEn` 写显示、`Halt` 停机。全 0 时一个门都不开，所以气泡不必是"一条合法指令"。照旧动作的只有 ALU（`ALUop` 被清成 `0000` = ADD，还可能吐无效进位），但它的结果没有接收方：两个前递 mux 都以 `RegWrite` 为命中条件（§4），一个 `RegWrite=0` 的 `ALUResult` 谁也取不走。漏清任何一位都会破坏这个性质，最狠的是 `Halt`——气泡一路流进 `MEM/WB` 后会把 `ClockEnable` 拉低，整机冻死（§1）。
 
 ## 6. PC 与流水线控制汇总
 
@@ -811,7 +815,7 @@ stall=1 时：`PCWrite=0`（PC 保持）、`IF_IDWrite=0`（IF/ID 保持）、`I
 
 flush 灌进 `IF/ID` 的常量是保留 opcode `0xF00000`，不是全 0。v2 里全 0 译出来是 `ADD R0,R0,R0`（`isa.md` §10），`RegWrite` 与 `CWrite` 都是 1——每跳转一次就把 `R0 ← R0+R0`、再往 C 里写一个无效进位，程序只要用到 R0 或 `ADC`/`SBC` 就会被悄悄改坏。保留 opcode 译出的控制位全 0（§3.8），才是真 NOP。做法：`IF/ID` 的 D 端加一个 2 选 1 mux，flush 时选常量 `0xF00000`。
 
-`IF/ID` 的写使能取 `IF_IDWrite || flush`。两者互斥（flush 成立时 `stall` 必为 0，理由同上），一个或门就够，没有优先级要争。
+`IF/ID` 的写使能取 `IF_IDWrite || flush`。两者互斥（flush 成立时 `stall` 必为 0，理由同上），所以 flush 成立的那几拍 `IF_IDWrite` 本来就是 1，这个或门并不改变使能的取值。作废靠的是 D 端那个 mux 选常量 `0xF00000`，不是靠使能——把或门漏掉不会让 flush 失效，只会在将来多出一个能与 flush 同拍的停顿来源时少一层保险。
 
 ## 7. 各段职责速查
 
@@ -822,7 +826,7 @@ flush 灌进 `IF/ID` 的常量是保留 opcode `0xF00000`，不是全 0。v2 里
 | IF | ROM 读（地址 = PC）、PC+1 增量器、跳转目标 mux（§2.6） |
 | ID | 译码器（§3.8）；两个读口接字段（§3.2）；停顿逻辑（§5.2） |
 | EX | 两个前递 mux（§4）、`BSrc` mux（§3.3）、写数据二选一（§3.6）、ALU（§2.2）、C 寄存器（§2.3）、分支判定与 `JMP`（§5.1） |
-| MEM | `RAM.Address ← EX/MEM.ALUResult`、`RAM.DataIn ← EX/MEM.WriteData`、`MemWrite` 接写使能（§3.6） |
+| MEM | `RAM.Address ← EX/MEM.ALUResult`、`RAM.DataIn ← EX/MEM.WriteData`、`MemWrite && ClockEnable` 接写使能（§2.5 / §1） |
 | WB | MemToReg mux 选写回值 → 寄存器堆写口（地址取 `MEM/WB.rd`）；OutEn 写 Output 寄存器（§2.8） |
 
 ## 8. 建议搭建顺序（每步可独立验证）
@@ -964,10 +968,12 @@ flush 灌进 `IF/ID` 的常量是保留 opcode `0xF00000`，不是全 0。v2 里
             HLT
     ```
     若显示 `0x20`，有两种成因，都要查：
-    - 这条 load→分支没停。`BZ` 走到 EX 那一拍 load 还在 `EX/MEM`，那里只有地址没有数据，A 前递 mux 的优先级 1 换上来的是地址 `0x20`（≠0），`BZ` 于是误判"该跳"。修法见 §5.2：判据是 `stall = ID_EX.MemRead && dep`，load 在 `ID/EX`、`BZ` 在 ID 的那一拍必须停住，等 load 走进 `MEM/WB`，`BZ` 才能从优先级 2 拿到数据。
+    - 这条 load→分支没停。`BZ` 走到 EX 那一拍 load 还在 `EX/MEM`（那里只有地址），而 `EX/MEM.MemRead=1` 把优先级 1 挡掉了、`MEM/WB` 里那条是 03 的 `STA`（`RegWrite=0`）也命中不了，A 前递 mux 落到寄存器堆的旧值 `R3=0`，`BZ` 判"该跳"，跑进 `bad` 显示 `0x20`（显示的 `0x20` 是 `bad` 里的 `OUT R1`，不是被前递上来的地址）。修法见 §5.2：判据是 `stall = ID_EX.MemRead && dep`，load 在 `ID/EX`、`BZ` 在 ID 的那一拍必须停住，等 load 走进 `MEM/WB`，`BZ` 才能从优先级 2 拿到数据。
     - A 前递 mux 少了优先级 2：03 的 `STA R2,0x20` 读的 R2 距 01 是 k=2，取到旧值 0，`RAM[0x20]` 没写进 5，04 的 `LD` 读回 0，05 的 `BZ` 一样判"该跳"。
 
     那条填充不能省：没有它，`LDI R1` 与 `LD R3,[R1]` 正好相隔 k=3，本条会连带依赖 §4.1 的下降沿写口——写口坏掉时 `LD` 读到的 R1 是旧值 0，转而去读 `RAM[0]`（初值 0）、载入 R3=0，`BZ` 判"该跳"走进 `bad`，同样显示 `0x20`，与"没停"的症状一字不差。两个故障给同一个值，这条调试项就废了。
+
+    本条能抓到"没停"，靠的是 §4 优先级 1 里的 `!EX/MEM.MemRead`。省掉它，没停时 `BZ` 会从优先级 1 拿到地址 `0x20`（≠0）而不跳、顺落到 06 的 `OUT R3`，那时 04 已把 R3 写回 5，显示 `0x05` 与正解一字不差，本条就成了假通过。这一项在停顿正常时取不到值（能命中它的那一拍必被 §5.2 的 `dep` 拦下），但它是"漏停"唯一可观察的出口，别删。
 14. 误停（多插气泡）（§8 第 7 步；见 §5.2）：跑
     ```
             LD  R0, [R2]      ; 写 R0、读 R2

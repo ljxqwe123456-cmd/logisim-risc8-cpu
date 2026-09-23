@@ -490,7 +490,7 @@ C 为什么需要一个写使能：ALU 每拍都在算，`Cout` 每拍都有值�
 
 `OUT`：`BSrc=0`，A 口取 `rs1 [11:8]` 的源寄存器，`PASS.A` 得到 `ALUResult = Rs1`，随 EX/MEM → MEM/WB 传到 WB，由 `OutEn` 写入 Output 寄存器。显示值必须走 `ALUResult`：MEM/WB 只有 `MemData` 和 `ALUResult` 两个字段、没有 WriteData 通路，而 OUT 的 `MemRead=0` 使 `MemData` 是该地址上无意义的值。
 
-`HLT`：`Halt` 不是"取指那一拍有效"的脉冲，它随流水线逐级锁存（ID/EX → EX/MEM → MEM/WB），到 WB 段才取用：`ClockEnable = !MEM/WB.Halt`，冻结全部时序元件（PC、四级流水线寄存器、C 标志、Output 寄存器）。不能在 ID 段一译出 HLT 就冻住，因为 HLT 前面那条指令（通常是程序最后一条 `OUT`）要走到自己的 WB 拍才写回，提前掐时钟会把它丢掉。接线见 `docs/datapath.md` §1、§2.7。
+`HLT`：`Halt` 不是"取指那一拍有效"的脉冲，它随流水线逐级锁存（ID/EX → EX/MEM → MEM/WB），到 WB 段才取用：`ClockEnable = !MEM/WB.Halt`，冻结全部时序元件（逐件清单与各自的接法见 `docs/datapath.md` §1）。不能在 ID 段一译出 HLT 就冻住，因为 HLT 前面那条指令（通常是程序最后一条 `OUT`）要走到自己的 WB 拍才写回，提前掐时钟会把它丢掉。接线见 `docs/datapath.md` §1、§2.7。
 
 ## 9. 冒险与停顿（要点，完整表见 datapath.md）
 
