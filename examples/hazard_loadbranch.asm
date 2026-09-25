@@ -5,11 +5,11 @@
 ;
 ; 05 的 BZ 在 EX 段判零要的是 R3，而 R3 由紧邻的 04 的 LD 产生（k=1）。
 ;   这时候照常放它走：05 到 EX 那一拍 04 才刚进 EX/MEM，而 load 的 ALUResult 是【地址】、
-;   不是数据。优先级 1 被 !EX/MEM.MemRead 挡掉、MEM/WB 里是 03 的 STA（RegWrite=0）也命中
+;   不是数据。优先级 1 被 !EX/MEM.MemToReg 挡掉、MEM/WB 里是 03 的 STA（RegWrite=0）也命中
 ;   不了，A 前递 mux 落到寄存器堆的旧值 R3=0，BZ 判"该跳"，跑进 bad 显示 0x20。
 ; 正解：本条要【停顿 1 拍】。判据是 04 还在 ID/EX 里（ID_EX.MemRead=1）且它的 rd 命中
 ;   05 的源槽 —— 停完 04 走进 MEM/WB，05 再从优先级 2 拿到数据。
-; 本条能抓到"没停"，靠的正是上面那个 !EX/MEM.MemRead（docs/datapath.md §4）：省掉它，
+; 本条能抓到"没停"，靠的正是上面那个 !EX/MEM.MemToReg（docs/datapath.md §4）：省掉它，
 ;   BZ 会从优先级 1 拿到地址 0x20（≠0）而不跳，顺落到 06 的 OUT R3，那时 R3 已写回 5，
 ;   显示 0x05 与正解一字不差，本条就成了假通过。
 ;

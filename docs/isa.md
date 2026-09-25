@@ -426,14 +426,14 @@ C 为什么需要一个写使能：ALU 每拍都在算，`Cout` 每拍都有值�
 | CWrite | 进位标志 C 的写使能：仅 ADD/ADC/SUB/SBC 为 1 |
 | BSrc | 1 = ALU 的 B 输入选立即数或地址；0 = 选寄存器 B 口读数 |
 | ALUop[3:0] | ALU 功能码。它是译码器生成的控制值，不是 `fn` 字段本身：`op0\|op1` 时等于 `fn`，其余九条由两级 mux 落成 `PASS.B`（`LDA` / `STA`）或 `PASS.A`（见下表与本节末）。所以"非 ALU 指令的 `fn` 槽填 0"不等于"它们做加法" |
-| MemRead / MemWrite | 本条要读 / 要写数据 RAM。`MemWrite` 直接接 RAM 的写使能脚；`MemRead` 不接 RAM，因为 RAM 读是组合逻辑、没有读使能脚（`docs/datapath.md` §2.5）。它是给 load-use 停顿和前递优先级 1 的排除项用的标志，并恒等于 `MemToReg`（一个门扇出两根线） |
-| MemToReg | 1 = 写回值选 RAM 读值；0 = 选 ALU 结果。这个 mux 不能省：`LDA` / `LD` 的 `ALUResult` 是访存地址，数据在 `MemData` 里，少了它 `LD R1,[R2]` 写回的是地址而不是那个地址里的数。`STA` / `ST` 该位填 `-`（无关），因为它们 `RegWrite=0`，mux 选什么都写不进寄存器堆 |
+| MemRead / MemWrite | 本条要读 / 要写数据 RAM。`MemWrite` 直接接 RAM 的写使能脚；`MemRead` 不接 RAM，因为 RAM 读是组合逻辑、本设计里没有要用它驱动的脚（`docs/datapath.md` §2.5）。它是给 load-use 停顿（`stall = ID_EX.MemRead && dep`）用的标志，并恒等于 `MemToReg`（一个门扇出两根线） |
+| MemToReg | 1 = 写回值选 RAM 读值；0 = 选 ALU 结果。这个 mux 不能省：`LDA` / `LD` 的 `ALUResult` 是访存地址，数据在 `MemData` 里，少了它 `LD R1,[R2]` 写回的是地址而不是那个地址里的数。前递单元也读这一位：`EX/MEM` 里装着 load 时它的写回值还没出来，优先级 1 的命中条件因此带 `!EX/MEM.MemToReg`（`docs/datapath.md` §4）。`STA` / `ST` 该位填 `-`（无关），因为它们 `RegWrite=0`，mux 选什么都写不进寄存器堆 |
 | BranchZ / BranchNZ | BZ / BNZ 使能 |
 | Jump | JMP 使能 |
 | OutEn | OUT 输出使能 |
 | Halt | 停机。要随流水线一路锁存到 `MEM/WB`，在那里取用才生效（见本节末） |
 
-访存为什么不用一根线表示：因为有三种状态。`LDA` / `LD` 读、`STA` / `ST` 写、其余 11 条两样都不是（信号是按指令译码的，不是按阶段取的）。一位线编码不了三态，硬拿它当"读还是写"的选择位，就还得再配一根"这条是不是访存"。何况这两根线本来就不对称：`MemWrite` 是 RAM 的真引脚，`MemRead` 只是随流水线传下去的"结果要迟一拍"标记。能合并的那一半已经合并了，即 `MemRead` 恒等于 `MemToReg`，译码器里就是一个 `op2|op4` 或门扇出两根线（`docs/datapath.md` §3.8）。两个名字是因为消费的级不同：`MemRead` 在停顿检测与前递排除里用，`MemToReg` 要一路锁存到 `MEM/WB` 当写回 mux 的选择端（§2.7 的字段表里 `MEM/WB` 有 `MemToReg`、没有 `MemRead`）。
+访存为什么不用一根线表示：因为有三种状态。`LDA` / `LD` 读、`STA` / `ST` 写、其余 11 条两样都不是（信号是按指令译码的，不是按阶段取的）。一位线编码不了三态，硬拿它当"读还是写"的选择位，就还得再配一根"这条是不是访存"。何况这两根线本来就不对称：`MemWrite` 是 RAM 的真引脚，`MemRead` 只是随流水线传下去的"结果要迟一拍"标记。能合并的那一半已经合并了，即 `MemRead` 恒等于 `MemToReg`，译码器里就是一个 `op2|op4` 或门扇出两根线（`docs/datapath.md` §3.8）。两个名字是因为取用的位置不同：`MemRead` 只在 ID 段的停顿检测里用（§2.7 的字段表里 `MEM/WB` 没有它）；`MemToReg` 要一路锁存到 `MEM/WB` 当写回 mux 的选择端，同一份值在 `EX/MEM` 上又被前递单元读去做优先级 1 的排除项（`docs/datapath.md` §4）。
 
 逐条指令控制信号。`-` 表示无关，设计上取 0：
 
