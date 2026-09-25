@@ -33,7 +33,7 @@ python asm\asm.py examples\fib.asm build\fib
 python asm\asm.py examples\fib.asm
 ```
 
-改完 `asm/asm.py` 或任何 `.asm` 后，**两件事都要做**：跑 `--selftest`，并重新汇编受影响的示例确认机器码没变（纯注释改动不应改变 `.mem`）。`build/` 已纳入版本控制，所以重新汇编完 `git status` 干净就是"机器码没变"的直接证据——`.gitattributes` 关掉行尾转换就是为了让这条对比逐字节成立。
+改完 `asm/asm.py` 或任何 `.asm` 后，**两件事都要做**：跑 `--selftest`，并重新汇编受影响的示例确认机器码没变（纯注释改动不应改变 `.mem`）。`build/` 已纳入版本控制，所以重新汇编完 `git status` 干净就是"机器码没变"的直接证据——`asm.py` 用 `newline='\n'` 强制产物为 LF（与平台无关）、`.gitattributes` 的 `* -text` 关掉行尾转换，两件事合起来让这条对比逐字节成立。
 
 ## 架构速览
 
@@ -85,7 +85,7 @@ WriteData = (MemWrite && BSrc) ? A_mux_out : B_mux_out   ; 选择端恰好只有
 ## 易错点（改代码前先读）
 
 1. **寄存器堆写口是下降沿**——全设计**唯一**一处时钟反相。看似无用（搭建第 1 步完全看不出差别），但没有它 k=3 就错。别"顺手改回上升沿"。
-2. **分支操作数取自 §4 那两个 A/B 前递 mux 里的 A 口那一个，没有第三套 mux**。它吃的是那个 mux 的优先级 1（`EX/MEM`，命中条件里要排除 `EX/MEM.MemRead`）与优先级 2（`MEM/WB`）——与 ALU 族同一套，没有分支专用的取值网络。接漏任一级时分支读到旧值，误判"跳/不跳"（`hazard_branch` → `0x10`，`hazard_k2branch` → `0x10`）。
+2. **分支操作数取自 §4 那两个 A/B 前递 mux 里的 A 口那一个，没有第三套 mux**。它吃的是那个 mux 的优先级 1（`EX/MEM`，命中条件里要排除 `EX/MEM.MemToReg`——这条要写回的是 RAM 读值，此刻还没出来）与优先级 2（`MEM/WB`）——与 ALU 族同一套，没有分支专用的取值网络。接漏任一级时分支读到旧值，误判"跳/不跳"（`hazard_branch` → `0x10`，`hazard_k2branch` → `0x10`）。
 3. **taken 时 `IF/ID` 与 `ID/EX` 两处都要清**。判定在 EX，比 ID 晚一拍，已经在飞的有两条顺落指令：`IF/ID` 里那条灌保留 opcode（**`0xF00000`、不是全 0**——全 0 是 `ADD R0,R0,R0`，`RegWrite`/`CWrite` 都是 1，每跳一次就写坏一次 R0 和 C；它还要**压过 `IF_IDWrite=0`**），`ID/EX` 的 D 端清零（复用气泡 mux，选择端 `stall || branch_taken || ID_EX.Jump`）。只清一头，另一条会晚一拍照样执行完（`hazard_flush.asm` → `0x11` / `0x22`）。
 4. **load→分支停 1 拍就够**，与 load-use 是同一条规则（`stall = ID_EX.MemRead && dep`）——它不区分读 Rd 的那条是不是分支，**别为分支另写一条停顿条件**。另：`branch_taken` 与 flush **不需要 `&& !stall`**，`stall` 的前提 `ID_EX.MemRead` 在分支占着 `ID/EX` 的那一拍恒为 0（`datapath.md` §5.1）。
 5. **气泡要把 `ID/EX.RegWrite` 和控制位一起清 0**。只清控制信号的话，残值会让停顿条件误触发。

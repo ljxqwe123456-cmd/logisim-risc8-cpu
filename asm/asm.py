@@ -487,9 +487,13 @@ def main(argv):
     out_dir = os.path.dirname(os.path.abspath(prefix))
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    with open(lst_path, 'w', encoding='utf-8') as f:
+    # newline='\n'：产物一律 LF。默认的换行转换会让 Windows 上写出 CRLF、
+    # 别的平台上写出 LF，同一个源文件在不同机器上汇编出不同字节——那样
+    # "重新汇编后 git status 干净 == 机器码没变" 这条判据就不成立了。
+    # Logisim 自己 Save Image 写出的也是 LF（FileWriter 不做换行转换）。
+    with open(lst_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(format_listing(listing))
-    with open(mem_path, 'w', encoding='utf-8') as f:
+    with open(mem_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(format_mem(words))
 
     print(f"汇编完成: {len(words)} 条指令")
