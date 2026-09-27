@@ -1,12 +1,13 @@
 # 8 位 RISC CPU —— 学习项目
 
-一台面向 Logisim-Evolution 手工搭建的五级流水线 CPU。本项目交付的是**设计文档 + 汇编器 + 测试程序**，电路由你亲手搭——文档给出每个模块的输入输出信号清单，照图接线即可。
+一台面向 Logisim-Evolution 手工搭建的五级流水线 CPU。本项目交付的是**设计文档 + 汇编器 + 测试程序**，外加一份搭好的电路 `cpu.circ`——文档给出每个模块的输入输出信号清单，照图接线即可；自己搭的时候可以拿它对照。
 
 规格：8 位数据通路、24 位定长指令、16 个通用寄存器（R0–R15，没有恒零寄存器）、Harvard（指令 ROM 256×24 与数据 RAM 256×8 分离）、五级流水 IF/ID/EX/MEM/WB。
 
 ## 目录结构
 
 ```
+cpu.circ          手搭的电路（Logisim-Evolution 工程文件）
 CLAUDE.md         AI 协作入口：权威顺序、常用命令、冒险规则速查、易错点
 README.md         本文件：怎么入手、每个程序该输出什么、哪个程序能当判据
 docs/
@@ -15,7 +16,7 @@ docs/
   CHANGELOG.md    两份文档的历史改动记录
 asm/
   asm.py          Python 汇编器（源码 → .lst 清单 + .mem ROM 镜像）
-examples/         12 个测试程序（.asm，含 5 个 hazard_* 冒险专项自测）
+examples/         13 个测试程序（.asm，含 6 个 hazard_* 冒险专项自测）
 build/            汇编产物（每个示例一对 .lst + .mem）
 ```
 
@@ -82,8 +83,9 @@ python asm\asm.py --selftest
 | 10 | `add16.asm` | §8 第 8 步 | ADD/ADC 多字节：`0x00FF + 0x0001 = 0x0100`（高字节进位）。无 k=3、无 load-use、无分支，验 C 标志时不会混进别的问题 |
 | 11 | `sub16.asm` | §8 第 8 步 | SUB/SBC 多字节：`0x0200 - 0x0001 = 0x01FF`（借位）。无 k=3、无 load-use、无分支，验借位时不会混进别的问题 |
 | 12 | `step5_smoke.asm` | §8 第 5 步 | 流水线骨架贯通冒烟。结果不在 OUT 而在 RAM：`0x10`-`0x13` = `11 22 33 44`、`0x14` = `07`、`0x20` = `11`。不含任何冒险，前递 / 停顿 / 分支都还没搭就能跑；主查寄存器堆写地址有没有从单周期版本的 `Inst[15:12]` 改接 `MEM/WB.rd`（§2.1） |
+| 13 | `hazard_k2.asm` | §8 第 6 步 | 冒险自测：间隔 2 条的 RAW，判据是前递优先级 2（`MEM/WB` 那一路，`datapath.md` §4）。结果不在 OUT 而在 RAM：`0x40` = `0xA1`（STA 数据源走 A 口）、`0x41` = `0xB2`（ST 数据源走 B 口）、`0x42` = `0x2A`（ADD 结果经 A 口）。不需要停顿 / 分支 / OUT |
 
-12 个程序里有 9 个含冒险，但"含冒险"不等于"能当判据"——有 4 处是假通过：把对应的修复去掉，程序照样跑、输出一个字都不差。`step5_smoke.asm` 是唯一一个不含冒险的，它验的是搭建进度而不是某项修复，别拿它当任何一项的判据。
+13 个程序里有 12 个含冒险，但"含冒险"不等于"能当判据"——有 4 处是假通过：把对应的修复去掉，程序照样跑、输出一个字都不差。`step5_smoke.asm` 是唯一一个不含冒险的，它验的是搭建进度而不是某项修复，别拿它当任何一项的判据。
 
 ## 判据可用性
 
@@ -106,6 +108,7 @@ python asm\asm.py --selftest
 | `array_sum.asm` | 有效 | 有效 | 有效 | 假通过 | 假通过 |
 | `add16.asm` / `sub16.asm` | — | 有效 | 有效 | — | — |
 | `step5_smoke.asm` | — | — | — | — | — |
+| `hazard_k2.asm` | — | — | 有效 | — | — |
 
 前递那两列指的是"那一级 mux 根本没接"，A 口与 B 口各有一个 mux、各有优先级 1/2 两路；程序考的是哪一侧，见 `datapath.md` §9 第 9 / 11 条与各文件头。
 
@@ -122,7 +125,7 @@ python asm\asm.py --selftest
 |---|---|---|
 | §4.1 下降沿写口（k=3） | `hazard_k3.asm`（`sum1to10` / `array_sum` 同效） | `0x00`（正解 `0xFF`）；`sum1to10` 是 `0x8A`（正解 `0x37`），`array_sum` 是 `0x0E`（正解 `0x15`） |
 | §4 前递优先级 1（`EX/MEM` 那一路） | `hazard_branch.asm`（`fib.asm` 同效；A 口）或 `hazard_k3.asm`（B 口，`ST` 的数据源） | `hazard_branch`：`0x10`（正解 `5`）；`fib`：序列末项 `0x59` 而非 `55`；`hazard_k3`：`0x00` |
-| §4 前递优先级 2（`MEM/WB` 那一路） | `hazard_k2branch.asm`（专为它写的，A 口）或 `hazard_branch.asm` 的 04、`hazard_loadbranch.asm` 的 03；`sum1to10.asm` / `array_sum.asm` 的循环体也吃这一级 | `hazard_k2branch`：`0x10`；`hazard_branch`：`0x00`；`hazard_loadbranch`：`0x20`（正解都是 `5` / `0x05`）；`sum1to10`：循环停不下来，一个值都不输出；`array_sum`：`0x19` |
+| §4 前递优先级 2（`MEM/WB` 那一路） | `hazard_k2.asm`（专为它写的，走 store 与 ALU，不用分支也不用 OUT）或 `hazard_k2branch.asm`（A 口）或 `hazard_branch.asm` 的 04、`hazard_loadbranch.asm` 的 03；`sum1to10.asm` / `array_sum.asm` 的循环体也吃这一级 | `hazard_k2`：RAM 三格都是 `0x0F`（正解 `0xA1` / `0xB2` / `0x2A`）；`hazard_k2branch`：`0x10`；`hazard_branch`：`0x00`；`hazard_loadbranch`：`0x20`（正解都是 `5` / `0x05`）；`sum1to10`：循环停不下来，一个值都不输出；`array_sum`：`0x19` |
 | §5.2 load-use 停顿 | `square_lookup.asm`（`hazard_k3.asm` 同效） | `0x00`（正解 `9`） |
 | §5.1 taken 时作废两条顺落指令 | `hazard_flush.asm`（`fib.asm` 也考，但它同时依赖前递优先级 1） | `hazard_flush`：`0x11` 或 `0x22`（正解 `0x00`）；`fib`：只输出一次 `1` 就 HLT（正解 10 个数） |
 

@@ -4,9 +4,9 @@
 
 ## 这个仓库里有什么 / 没有什么
 
-**只有规格与工具，没有电路。** 交付物是设计文档 + Python 汇编器 + 测试程序；**电路由人手工在 Logisim 里搭**。
+**交付物是设计文档 + Python 汇编器 + 测试程序，外加一份搭好的电路 `cpu.circ`。** 电路由人手工在 Logisim 里搭。
 
-- `.circ` / `.logisim` 电路文件由人手工在 Logisim 里搭，不要由你生成。现在还没有，作者拼好之后会加进来。
+- `cpu.circ`（仓库根目录）由人手工在 Logisim 里维护：不要由你生成，也不要改它的内容。文档与它不一致时，改文档或提醒作者改电路，别自己动电路文件。
 - 你的活通常是：改规格文档、改汇编器、加/改测试程序、核对文档与实现是否自洽。
 - `build/` 是汇编产物（生成物，可随时重建；不要手改）。
 - 仓库是 git 仓库（`main` 分支），`build/` 已纳入版本控制——重新汇编后 `git status` 干净就说明机器码没变。
@@ -104,7 +104,7 @@ WriteData = (MemWrite && BSrc) ? A_mux_out : B_mux_out   ; 选择端恰好只有
 |---|---|
 | k=3（下降沿写口） | `examples/hazard_k3.asm` → `0xFF`（`sum1to10.asm` → `0x8A`、`array_sum.asm` → `0x0E` 同效） |
 | 前递优先级 1（`EX/MEM` 那一路） | `examples/hazard_branch.asm` → `5`；`examples/fib.asm` → 序列末项 `0x59`；`examples/hazard_k3.asm` 的 B 口 → `0x00` |
-| 前递优先级 2（`MEM/WB` 那一路） | `examples/hazard_k2branch.asm` → `5`（最干净的一条）；`examples/hazard_branch.asm` → `0x00`；`examples/hazard_loadbranch.asm` → `0x20` |
+| 前递优先级 2（`MEM/WB` 那一路） | `examples/hazard_k2branch.asm` → `5`（最干净的一条）；`examples/hazard_k2.asm` → RAM `0x40`/`0x41`/`0x42` = `0xA1`/`0xB2`/`0x2A`（第 6 步就能跑：不用分支、不用 OUT）；`examples/hazard_branch.asm` → `0x00`；`examples/hazard_loadbranch.asm` → `0x20` |
 | load-use | `examples/square_lookup.asm` → `9` |
 | load→分支（同一条停顿规则） | `examples/hazard_loadbranch.asm` → `0x05` |
 | taken 时作废两条顺落指令 | `examples/hazard_flush.asm` → `0x00`（`fib.asm` 也考，但它同时依赖优先级 1） |
