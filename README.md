@@ -12,6 +12,7 @@
 cpu.circ          手搭的电路（Logisim-Evolution 工程文件）
 CLAUDE.md         AI 协作入口：权威顺序、常用命令、冒险规则速查、易错点
 README.md         本文件：怎么入手、每个程序该输出什么、哪个程序能当判据
+LICENSE           MIT 许可证
 docs/
   isa.md          指令集架构规范（编码权威 + 控制信号表 + 冒险要点）
   datapath.md     数据通路搭建指南（模块接口 + 前递/冒险对照表 + 搭建顺序 + 调试要点）
@@ -171,3 +172,7 @@ python asm\asm.py --selftest
 2. 读 `docs/isa.md`，跑 `python asm\asm.py --selftest`，汇编一个示例看 `.lst`。
 3. 按 `docs/datapath.md` §8 从寄存器堆搭起，每步验证。
 4. 用 `fib.asm` 做最终验收（OUT 输出斐波那契序列）。
+
+## 许可证
+
+MIT，见 `LICENSE`：可以自由使用、修改、再发布，保留版权声明即可。
