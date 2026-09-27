@@ -38,6 +38,8 @@ build/            汇编产物（每个示例一对 .lst + .mem）
 
 ## 快速上手
 
+**只想让它跑起来**：用 Logisim-Evolution 打开仓库根目录的 `cpu.circ`（就是搭好的整机，程序 ROM 已经设成 24 位数据、里面预载着一个示例镜像），跳到下面「2. 载入 Logisim 并运行」换一个 `.mem` 即可，不用自己接线。**想自己搭一遍**：从「1. 汇编」开始按顺序往下走。
+
 ### 1. 汇编
 
 ```powershell
@@ -61,11 +63,11 @@ python asm\asm.py --selftest
 2. 右键 ROM → Load Image → 选对应的 `.mem` 文件。
 3. 单步或连续时钟，观察 PC、各流水线寄存器、寄存器堆、OUT 的 LED 序列。
 
-> 这一步先确认一下：把 ROM 的 Data Bit Width 设成 24 之后，Load Image 能不能吃下 6 位十六进制的字。这一条取决于 Logisim 版本的 ROM 组件，文档替你验不了。真的不接受，再回来商量把指令补到 32 位（字段位置全不变，只是每条多 8 位保留位）。
+> 24 位的 ROM 吃不吃得下 6 位十六进制的字，本仓库已经验过了：`cpu.circ` 里那个 ROM 就是 Data Bit Width = 24、地址位宽用默认的 8，`build/` 下 13 个 `.mem` 全部按这个格式载入并跑通过。
 
 ### 3. 验证程序输出
 
-每个程序第一次应该跑通的 `datapath.md` §8 步骤见下表「验证时机」列（`hazard_k3` 要在第 1 步的下降沿、第 6 步的前递、第 7 步的 Hazard Unit 三件套齐了之后才对）。行序与 §8 的搭建顺序无关，按「验证时机」列挑程序：排在第 2 行的 `hazard_k3` 从第 1 步起就要反复用，排在第 1 行的 `hazard_branch` 反而要等到第 7 步。每个 `.asm` 文件头也写了同样一行。
+每个程序第一次应该跑通的 `datapath.md` §8 步骤见下表「验证时机」列（`hazard_k3` 要在第 1 步的下降沿、第 6 步的前递、第 7 步的 Hazard Unit 三件套齐了之后才对）。行序与 §8 的搭建顺序无关，按「验证时机」列挑程序：排在第 2 行的 `hazard_k3` 从第 1 步起就要反复用，排在第 1 行的 `hazard_branch` 反而要等到第 7 步；表里最早能跑的是排在第 13 行的 `hazard_k2`（不用分支也不用 OUT，第 6 步前递 mux 搭好就能跑）。每个 `.asm` 文件头也写了同样一行。
 
 ## 程序判据表
 
@@ -92,6 +94,7 @@ python asm\asm.py --selftest
 表里每一格的填法：把该项修复故意去掉重跑，看程序会不会出错。
 
 - **有效** = 会出错，可当判据
+- **有效（第 8 步起）** = 会出错，但"去掉修复后出错"这件事要等 §8 第 8 步接上停机使能 `ClockEnable` 才看得出来。目前只有 `fib.asm` 的「taken 作废两条」一格是这种：`HLT` 在第 8 步之前没有让时钟停下的能力，顺落的那条 `HLT` 执行了也和没执行一样，所以更早的步骤里它其实是假通过——第 7 步用 `fib` 只读它的前递两列。
 - **假通过** = 含该冒险，但去掉修复后输出不变
 - **—** = 程序不含该冒险
 
@@ -103,14 +106,14 @@ python asm\asm.py --selftest
 | `hazard_loadbranch.asm` | — | — | 有效 | 有效 | — |
 | `hazard_flush.asm` | — | — | — | — | 有效 |
 | `sum1to10.asm` | 有效 | 假通过 | 有效 | — | 假通过 |
-| `fib.asm` | — | 有效 | 有效 | — | 有效 |
+| `fib.asm` | — | 有效 | 有效 | — | 有效（第 8 步起） |
 | `square_lookup.asm` | — | 有效 | 有效 | 有效 | — |
 | `array_sum.asm` | 有效 | 有效 | 有效 | 假通过 | 假通过 |
 | `add16.asm` / `sub16.asm` | — | 有效 | 有效 | — | — |
 | `step5_smoke.asm` | — | — | — | — | — |
 | `hazard_k2.asm` | — | — | 有效 | — | — |
 
-前递那两列指的是"那一级 mux 根本没接"，A 口与 B 口各有一个 mux、各有优先级 1/2 两路；程序考的是哪一侧，见 `datapath.md` §9 第 9 / 11 条与各文件头。
+前递那两列指的是"那一级 mux 根本没接"，A 口与 B 口各有一个 mux、各有优先级 1/2 两路；程序考的是哪一侧，见 `datapath.md` §9 第 2 / 9 / 11 条与各文件头。
 
 四个直接可用的结论：
 
@@ -127,7 +130,7 @@ python asm\asm.py --selftest
 | §4 前递优先级 1（`EX/MEM` 那一路） | `hazard_branch.asm`（`fib.asm` 同效；A 口）或 `hazard_k3.asm`（B 口，`ST` 的数据源） | `hazard_branch`：`0x10`（正解 `5`）；`fib`：序列末项 `0x59` 而非 `55`；`hazard_k3`：`0x00` |
 | §4 前递优先级 2（`MEM/WB` 那一路） | `hazard_k2.asm`（专为它写的，走 store 与 ALU，不用分支也不用 OUT）或 `hazard_k2branch.asm`（A 口）或 `hazard_branch.asm` 的 04、`hazard_loadbranch.asm` 的 03；`sum1to10.asm` / `array_sum.asm` 的循环体也吃这一级 | `hazard_k2`：RAM 三格都是 `0x0F`（正解 `0xA1` / `0xB2` / `0x2A`）；`hazard_k2branch`：`0x10`；`hazard_branch`：`0x00`；`hazard_loadbranch`：`0x20`（正解都是 `5` / `0x05`）；`sum1to10`：循环停不下来，一个值都不输出；`array_sum`：`0x19` |
 | §5.2 load-use 停顿 | `square_lookup.asm`（`hazard_k3.asm` 同效） | `0x00`（正解 `9`） |
-| §5.1 taken 时作废两条顺落指令 | `hazard_flush.asm`（`fib.asm` 也考，但它同时依赖前递优先级 1） | `hazard_flush`：`0x11` 或 `0x22`（正解 `0x00`）；`fib`：只输出一次 `1` 就 HLT（正解 10 个数） |
+| §5.1 taken 时作废两条顺落指令 | `hazard_flush.asm`（`fib.asm` 也考，但它同时依赖前递优先级 1，且这一项要第 8 步起才判得动） | `hazard_flush`：`0x11` 或 `0x22`（正解 `0x00`）；`fib`：只输出一次 `1` 就 HLT（正解 10 个数）——第 8 步接上 `ClockEnable` 之后才看得见 |
 
 ## 四处假通过是怎么发生的
 
@@ -159,6 +162,7 @@ python asm\asm.py --selftest
 
 ## 动手顺序建议
 
-1. 读 `docs/isa.md`，跑 `python asm\asm.py --selftest`，汇编一个示例看 `.lst`。
-2. 按 `docs/datapath.md` §8 从寄存器堆搭起，每步验证。
-3. 用 `fib.asm` 做最终验收（OUT 输出斐波那契序列）。
+1. 只想跑不想搭：直接打开 `cpu.circ`，见上面「快速上手」的加粗一段。
+2. 读 `docs/isa.md`，跑 `python asm\asm.py --selftest`，汇编一个示例看 `.lst`。
+3. 按 `docs/datapath.md` §8 从寄存器堆搭起，每步验证。
+4. 用 `fib.asm` 做最终验收（OUT 输出斐波那契序列）。

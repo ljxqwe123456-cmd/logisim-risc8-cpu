@@ -107,7 +107,7 @@ WriteData = (MemWrite && BSrc) ? A_mux_out : B_mux_out   ; 选择端恰好只有
 | 前递优先级 2（`MEM/WB` 那一路） | `examples/hazard_k2branch.asm` → `5`（最干净的一条）；`examples/hazard_k2.asm` → RAM `0x40`/`0x41`/`0x42` = `0xA1`/`0xB2`/`0x2A`（第 6 步就能跑：不用分支、不用 OUT）；`examples/hazard_branch.asm` → `0x00`；`examples/hazard_loadbranch.asm` → `0x20` |
 | load-use | `examples/square_lookup.asm` → `9` |
 | load→分支（同一条停顿规则） | `examples/hazard_loadbranch.asm` → `0x05` |
-| taken 时作废两条顺落指令 | `examples/hazard_flush.asm` → `0x00`（`fib.asm` 也考，但它同时依赖优先级 1） |
+| taken 时作废两条顺落指令 | `examples/hazard_flush.asm` → `0x00`（`fib.asm` 也考，但它同时依赖优先级 1，且这一项要第 8 步接上 `ClockEnable` 才判得动——更早的步骤里 `HLT` 停不下时钟，去掉修复输出不变） |
 
 **没有任何单个程序能覆盖全部 5 项**：第 7 步的总验收 = `hazard_branch` + `fib` + `square_lookup` + `hazard_flush`；要连 load→分支一起验再加 `hazard_loadbranch`，要单独分辨优先级 2 再加 `hazard_k2branch`。
 
@@ -116,7 +116,7 @@ WriteData = (MemWrite && BSrc) ? A_mux_out : B_mux_out   ; 选择端恰好只有
 **假通过清单**（4 处；成因表见 `README.md`）：
 - `array_sum.asm`：load-use（0E，读错元素但两组和都是 21）与 taken 作废（顺落的 12 多执行，最后那次仍是 21）都测不出来；k=3 与两个前递列有效。
 - `sum1to10.asm`：前递优先级 1（05 的 `BNZ`，多跑一轮但加的是 0）与 taken 作废（顺落的 06 多执行，最后那次仍是 55）都测不出来；k=3 与优先级 2 有效。
-- `fib.asm`：无 k=3，覆盖前递优先级 1/2 与 taken 作废三项。
+- `fib.asm`：无 k=3，覆盖前递优先级 1/2；taken 作废那一项要等第 8 步 `ClockEnable` 接上才判得动，在那之前是假通过。
 - `hazard_flush.asm`：只考 taken 作废一项，不含其余四项（刻意——它是那两条假通过程序之外的独立判据）。
 - `hazard_branch.asm`：考前递优先级 1（03 的 `BZ`）与优先级 2（04 的 `OUT R3`），不含 k=3 / load-use / taken 作废。
 - `hazard_loadbranch.asm`：考 load→分支停顿与前递优先级 2 两项。
