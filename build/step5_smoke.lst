@@ -1,27 +1,27 @@
-00  181011          LDI R1, 0x11
-01  182022          LDI R2, 0x22
-02  183033          LDI R3, 0x33
-03  184044          LDI R4, 0x44
-04  300110          STA R1, 0x10     ; RAM[0x10] = 0x11
-05  300211          STA R2, 0x11     ; RAM[0x11] = 0x22
-06  300312          STA R3, 0x12     ; RAM[0x12] = 0x33
-07  300413          STA R4, 0x13     ; RAM[0x13] = 0x44
-08  185010          LDI R5, 0x10
-09  186000          LDI R6, 0
-0A  187000          LDI R7, 0
-0B  188000          LDI R8, 0
-0C  409500          LD  R9, [R5]     ; R9 = RAM[0x10] = 0x11
-0D  18A000          LDI R10, 0
-0E  18B000          LDI R11, 0
-0F  18C000          LDI R12, 0
-10  300920          STA R9, 0x20     ; RAM[0x20] = 0x11（走过 MemToReg mux 的 MemData 那一路）
-11  18D003          LDI R13, 3
-12  18E004          LDI R14, 4
-13  18F000          LDI R15, 0
-14  180000          LDI R0, 0
-15  186000          LDI R6, 0        ; 填充：把 11 / 12 与 16 的距离推到 k=4
-16  001DE0          ADD R1, R13, R14 ; R1 = 7
-17  187000          LDI R7, 0
-18  188000          LDI R8, 0
-19  18A000          LDI R10, 0
-1A  300114          STA R1, 0x14     ; RAM[0x14] = 0x07（走过 MemToReg mux 的 ALUResult 那一路）
+00  281011          LDI R1, 0x11
+01  282022          LDI R2, 0x22
+02  283033          LDI R3, 0x33
+03  284044          LDI R4, 0x44
+04  400110          STA R1, 0x10     ; RAM[0x10] = 0x11
+05  400211          STA R2, 0x11     ; RAM[0x11] = 0x22
+06  400312          STA R3, 0x12     ; RAM[0x12] = 0x33
+07  400413          STA R4, 0x13     ; RAM[0x13] = 0x44
+08  285010          LDI R5, 0x10
+09  286000          LDI R6, 0
+0A  287000          LDI R7, 0
+0B  288000          LDI R8, 0
+0C  509500          LD  R9, [R5]     ; R9 = RAM[0x10] = 0x11
+0D  28A000          LDI R10, 0
+0E  28B000          LDI R11, 0
+0F  28C000          LDI R12, 0
+10  400920          STA R9, 0x20     ; RAM[0x20] = 0x11（走过 MemRead mux 的 MemData 那一路）
+11  28D003          LDI R13, 3
+12  28E004          LDI R14, 4
+13  28F000          LDI R15, 0
+14  280000          LDI R0, 0
+15  286000          LDI R6, 0        ; 填充：把 11 / 12 与 16 的距离推到 k=4
+16  101DE0          ADD R1, R13, R14 ; R1 = 7
+17  287000          LDI R7, 0
+18  288000          LDI R8, 0
+19  28A000          LDI R10, 0
+1A  400114          STA R1, 0x14     ; RAM[0x14] = 0x07（走过 MemRead mux 的 ALUResult 那一路）

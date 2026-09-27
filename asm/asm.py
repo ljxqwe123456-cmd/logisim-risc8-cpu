@@ -24,8 +24,11 @@ import re
 # ---------------------------------------------------------------------------
 # 常量（位布局见 docs/isa.md §4）
 # ---------------------------------------------------------------------------
-(OP_ALUR, OP_ALUM, OP_LDA, OP_STA, OP_LD, OP_ST,
- OP_BZ, OP_BNZ, OP_JMP, OP_OUT, OP_HLT) = range(0xB)
+# op=0000 空出来一根门都不接：复位后的 IF/ID 是全 0、分支 flush 也灌全 0，
+# 全 0 机器码必须是空操作。为此所有 opcode 后移一位（见 docs/isa.md §10）。
+OP_ALUR = 0x1
+(OP_ALUM, OP_LDA, OP_STA, OP_LD, OP_ST,
+ OP_BZ, OP_BNZ, OP_JMP, OP_OUT, OP_HLT) = range(0x2, 0xC)
 
 # 指令 ROM 容量（256×24）。PC 是 8 位，程序只能占 0x00–0xFF，超出的部分取不到。
 ROM_WORDS = 256
@@ -367,29 +370,29 @@ def selftest() -> int:
     # 十六进制逐位对应 op|fn|rd|rs1|rs2/imm，读得出来才算钉死。
     # 两条 store 是唯一的例外：数据源占的是自己的源槽（STA→rs1、ST→rs2），rd 槽恒 0。
     cases = [
-        # ---- ALU 寄存器型（op=0000）：fn 0–6 + MOV（PASS.A, fn=7）----
-        ("ADD R1, R2, R3",   0x001230),
-        ("SUB R4, R1, R5",   0x024150),
-        ("SBC R1, R2, R3",   0x031230),
-        ("AND R1, R2, R3",   0x041230),
-        ("OR  R1, R2, R3",   0x051230),
-        ("XOR R7, R7, R7",   0x067770),
-        ("MOV R1, R2",       0x071200),
-        # ---- ALU 立即数型（op=0001）：同 7 个 fn + LDI（PASS.B, fn=8）----
-        ("ADD R1, R2, #5",   0x101205),
-        ("ADC R15, R0, 0xFF", 0x11F0FF),   # `#` 可省；R15/R0 合法
-        ("LDI R1, 5",        0x181005),
-        ("LDI R2, 0b1010",   0x18200A),
+        # ---- ALU 寄存器型（op=0001）：fn 0–6 + MOV（PASS.A, fn=7）----
+        ("ADD R1, R2, R3",   0x101230),
+        ("SUB R4, R1, R5",   0x124150),
+        ("SBC R1, R2, R3",   0x131230),
+        ("AND R1, R2, R3",   0x141230),
+        ("OR  R1, R2, R3",   0x151230),
+        ("XOR R7, R7, R7",   0x167770),
+        ("MOV R1, R2",       0x171200),
+        # ---- ALU 立即数型（op=0010）：同 7 个 fn + LDI（PASS.B, fn=8）----
+        ("ADD R1, R2, #5",   0x201205),
+        ("ADC R15, R0, 0xFF", 0x21F0FF),   # `#` 可省；R15/R0 合法
+        ("LDI R1, 5",        0x281005),
+        ("LDI R2, 0b1010",   0x28200A),
         # ---- 访存 / 分支 / 其它 ----
-        ("LDA R1, 0x2A",     0x20102A),
-        ("STA R1, 0x2A",     0x30012A),   # 数据源 R1 在 [11:8]，rd 槽编 0
-        ("LD R2, [R3]",      0x402300),
-        ("ST R2, [R3]",      0x500320),   # 地址 R3 在 [11:8]，数据源 R2 在 [7:4]，rd 槽编 0
-        ("BZ  R1, 0x10",     0x600110),
-        ("BNZ R1, 0x10",     0x700110),
-        ("JMP 0x00",         0x800000),
-        ("OUT R15",          0x900F00),
-        ("HLT",              0xA00000),
+        ("LDA R1, 0x2A",     0x30102A),
+        ("STA R1, 0x2A",     0x40012A),   # 数据源 R1 在 [11:8]，rd 槽编 0
+        ("LD R2, [R3]",      0x502300),
+        ("ST R2, [R3]",      0x600320),   # 地址 R3 在 [11:8]，数据源 R2 在 [7:4]，rd 槽编 0
+        ("BZ  R1, 0x10",     0x700110),
+        ("BNZ R1, 0x10",     0x800110),
+        ("JMP 0x00",         0x900000),
+        ("OUT R15",          0xA00F00),
+        ("HLT",              0xB00000),
     ]
     failures = 0
     for src, expected in cases:

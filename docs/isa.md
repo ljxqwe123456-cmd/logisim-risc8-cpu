@@ -26,14 +26,14 @@
 - 控制信号生成式（搭译码器用，推导见 §8）：
 
 ```
-CWrite   = (op==0000 || op==0001) && !fn[3] && !fn[2]
-ALUop    = (op0|op1) ? fn : ((op2|op3) ? PASS.B : PASS.A)    ; PASS.B=1000, PASS.A=0111
-BSrc     = op1 | op2 | op3
-RegWrite = op0 | op1 | op2 | op4
-MemRead  = op2 | op4            ; 恒等于 MemToReg，一个门扇出两根线
-MemWrite = op3 | op5
-BranchZ = op6    BranchNZ = op7    Jump = op8    OutEn = op9    Halt = op10
-op11-op15（保留）一根都不接，恒 0
+CWrite   = (op==0001 || op==0010) && !fn[3] && !fn[2]
+ALUop    = (op1|op2) ? fn : ((op3|op4) ? PASS.B : PASS.A)    ; PASS.B=1000, PASS.A=0111
+BSrc     = op2 | op3 | op4
+RegWrite = op1 | op2 | op3 | op5
+MemRead  = op3 | op5            ; 本条读数据 RAM；也是写回 mux 的选择端
+MemWrite = op4 | op6
+BranchZ = op7    BranchNZ = op8    Jump = op9    OutEn = op10    Halt = op11
+op0 与 op12-op15（保留）一根都不接，恒 0
 ```
 
 ## 1. 机器概况
@@ -95,8 +95,8 @@ R0 是普通寄存器：`LDI R0,#5` 合法，写进去就是 5。汇编器不禁
 
 | opcode 族 | `X = Inst[7:0]` |
 |---|---|
-| ALU 寄存器型（0000） | `{rs2, 4'b0000}`：rs2 占高半字节 `[7:4]`，低半字节 `[3:0]` 保留接 0 |
-| ALU 立即数型（0001） | `imm[7:0]` |
+| ALU 寄存器型（0001） | `{rs2, 4'b0000}`：rs2 占高半字节 `[7:4]`，低半字节 `[3:0]` 保留接 0 |
+| ALU 立即数型（0010） | `imm[7:0]` |
 | LDA / STA / BZ / BNZ / JMP | `addr[7:0]`（绝对地址） |
 | LD / ST / OUT / HLT | 全 0 |
 
@@ -114,26 +114,27 @@ R0 是普通寄存器：`LDI R0,#5` 合法，写进去就是 5。汇编器不禁
 
 | op [23:20] | 助记符 | 位布局 | 语义 |
 |---|---|---|---|
-| 0000 | ALU 寄存器型：`ADD` `ADC` `SUB` `SBC` `AND` `OR` `XOR` + `MOV`（见 §5） | `op(4) fn(4) rd(4) rs1(4) rs2(4) 0(4)` | `Rd ← Rs1 fn Rs2`；`MOV` 是 `fn=0111`（PASS.A），`Rd ← Rs1` |
-| 0001 | ALU 立即数型：`ADD` `ADC` `SUB` `SBC` `AND` `OR` `XOR` + `LDI`（见 §5） | `op(4) fn(4) rd(4) rs1(4) imm(8)` | `Rd ← Rs1 fn imm`；`LDI` 是 `fn=1000`（PASS.B），`Rd ← imm` |
-| 0010 | `LDA Rd,addr` | `op(4) 0(4) rd(4) 0(4) addr(8)` | Rd ← RAM[addr] |
-| 0011 | `STA Rs,addr` | `op(4) 0(4) 0(4) Rs(4) addr(8)` | RAM[addr] ← Rs |
-| 0100 | `LD Rd,[Rs1]` | `op(4) 0(4) rd(4) rs1(4) 0(8)` | Rd ← RAM[Rs1] |
-| 0101 | `ST Rs,[Rs1]` | `op(4) 0(4) 0(4) rs1(4) Rs(4) 0(4)` | RAM[Rs1] ← Rs |
-| 0110 | `BZ Rs1,addr` | `op(4) 0(4) 0(4) rs1(4) addr(8)` | Rs1==0 时 PC ← addr |
-| 0111 | `BNZ Rs1,addr` | `op(4) 0(4) 0(4) rs1(4) addr(8)` | Rs1!=0 时 PC ← addr |
-| 1000 | `JMP addr` | `op(4) 0(4) 0(4) 0(4) addr(8)` | PC ← addr |
-| 1001 | `OUT Rs1` | `op(4) 0(4) 0(4) rs1(4) 0(8)` | 显示 Rs1 |
-| 1010 | `HLT` | `op(4) 0(20)` | 停机。`Halt` 要锁存到 `MEM/WB` 才生效，见 §8 |
-| 1011-1111 | 保留（留给移位等） | - | 控制位全 0，是本 ISA 真正的空操作（见 `docs/datapath.md` §3.8） |
+| 0000 | 保留（空操作） | - | 控制位全 0，是本 ISA 真正的空操作。复位后的 `IF/ID` 与分支 flush 灌进 `IF/ID` 的都是它（§10、`docs/datapath.md` §6） |
+| 0001 | ALU 寄存器型：`ADD` `ADC` `SUB` `SBC` `AND` `OR` `XOR` + `MOV`（见 §5） | `op(4) fn(4) rd(4) rs1(4) rs2(4) 0(4)` | `Rd ← Rs1 fn Rs2`；`MOV` 是 `fn=0111`（PASS.A），`Rd ← Rs1` |
+| 0010 | ALU 立即数型：`ADD` `ADC` `SUB` `SBC` `AND` `OR` `XOR` + `LDI`（见 §5） | `op(4) fn(4) rd(4) rs1(4) imm(8)` | `Rd ← Rs1 fn imm`；`LDI` 是 `fn=1000`（PASS.B），`Rd ← imm` |
+| 0011 | `LDA Rd,addr` | `op(4) 0(4) rd(4) 0(4) addr(8)` | Rd ← RAM[addr] |
+| 0100 | `STA Rs,addr` | `op(4) 0(4) 0(4) Rs(4) addr(8)` | RAM[addr] ← Rs |
+| 0101 | `LD Rd,[Rs1]` | `op(4) 0(4) rd(4) rs1(4) 0(8)` | Rd ← RAM[Rs1] |
+| 0110 | `ST Rs,[Rs1]` | `op(4) 0(4) 0(4) rs1(4) Rs(4) 0(4)` | RAM[Rs1] ← Rs |
+| 0111 | `BZ Rs1,addr` | `op(4) 0(4) 0(4) rs1(4) addr(8)` | Rs1==0 时 PC ← addr |
+| 1000 | `BNZ Rs1,addr` | `op(4) 0(4) 0(4) rs1(4) addr(8)` | Rs1!=0 时 PC ← addr |
+| 1001 | `JMP addr` | `op(4) 0(4) 0(4) 0(4) addr(8)` | PC ← addr |
+| 1010 | `OUT Rs1` | `op(4) 0(4) 0(4) rs1(4) 0(8)` | 显示 Rs1 |
+| 1011 | `HLT` | `op(4) 0(20)` | 停机。`Halt` 要锁存到 `MEM/WB` 才生效，见 §8 |
+| 1100-1111 | 保留（留给移位等） | - | 控制位全 0（见 `docs/datapath.md` §3.8） |
 
-11 个 opcode 装下 18 条助记符，还留 5 个余量。§8 的控制表把它们并成 15 行，因为 7 条 ALU 运算的寄存器型与立即数型共用一个 `fn`，各并作一行。助记符是 18 条而不是 15 条，差别就在 `MOV` 与 `LDI`：两个 ALU 族各是"1 个 opcode + 8 个 `fn`"，`MOV` 和 `LDI` 没有各自的 opcode，它们分别是 `op=0000 fn=0111` 与 `op=0001 fn=1000`（见 §5），所以上表把它们列在助记符里，不单开一行。
+11 个 opcode 装下 18 条助记符，另 5 个码没用（0000 与 1100-1111，都不接线；0000 是留给空操作的，见 §10）。§8 的控制表把它们并成 15 行，因为 7 条 ALU 运算的寄存器型与立即数型共用一个 `fn`，各并作一行。助记符是 18 条而不是 15 条，差别就在 `MOV` 与 `LDI`：两个 ALU 族各是"1 个 opcode + 8 个 `fn`"，`MOV` 和 `LDI` 没有各自的 opcode，它们分别是 `op=0001 fn=0111` 与 `op=0010 fn=1000`（见 §5），所以上表把它们列在助记符里，不单开一行。
 
 ### fn 表（`Inst[19:16]`，只在两个 ALU 族里有意义）
 
 同一个 `fn` 在两个族里对应同一件事，只是 B 侧的操作数不同（寄存器型取 `Rs2`，立即数型取 `imm[7:0]`）：
 
-| fn | 寄存器型（`op=0000`）写成 | 立即数型（`op=0001`）写成 |
+| fn | 寄存器型（`op=0001`）写成 | 立即数型（`op=0010`）写成 |
 |---|---|---|
 | 0000-0110 | `ADD` / `ADC` / `SUB` / `SBC` / `AND` / `OR` / `XOR Rd,Rs1,Rs2` | 同左七条，第三操作数换成 `#imm` |
 | 0111 | `MOV Rd,Rs1`（PASS.A） | 汇编器不生成 |
@@ -142,7 +143,7 @@ R0 是普通寄存器：`LDI R0,#5` 合法，写进去就是 5。汇编器不禁
 
 九条运算各自的语义与进位约定见 §5，这里只是编码视图。
 
-其余九条指令（`LDA` `STA` `LD` `ST` `BZ` `BNZ` `JMP` `OUT` `HLT`）的 `fn` 槽硬件根本不看，汇编器按约定编成 0。"不看"不等于"它们做加法"：`fn` 只通向两处——`ALUop` 的 mux 与 `CWrite` 的与门，而两处的第一项都是 `op` 门。这九条 `op0|op1 = 0`，`fn` 一格都漏不出去，`ALUop` 由 mux 落成 `PASS.A` 或 `PASS.B`（§8）。`fn` 编成 0 还是别的值，结果一样。真把 `ALUop` 直接接 `fn`，`LDI` / `LDA` / `STA` 就会去算加法而不是直通，见 `docs/datapath.md` §3.8。
+其余九条指令（`LDA` `STA` `LD` `ST` `BZ` `BNZ` `JMP` `OUT` `HLT`）的 `fn` 槽硬件根本不看，汇编器按约定编成 0。"不看"不等于"它们做加法"：`fn` 只通向两处——`ALUop` 的 mux 与 `CWrite` 的与门，而两处的第一项都是 `op` 门。这九条 `op1|op2 = 0`，`fn` 一格都漏不出去，`ALUop` 由 mux 落成 `PASS.A` 或 `PASS.B`（§8）。`fn` 编成 0 还是别的值，结果一样。真把 `ALUop` 直接接 `fn`，`LDI` / `LDA` / `STA` 就会去算加法而不是直通，见 `docs/datapath.md` §3.8。
 
 但"编 0"这个约定让 `CWrite` 的 `op` 门不能省：`fn[3:2] = 00` 正好让与门放行，少了 `op` 门，这九条就会被当成 `ADD` 误写 C（§8）。
 
@@ -154,7 +155,7 @@ R0 是普通寄存器：`LDI R0,#5` 合法，写进去就是 5。汇编器不禁
 
 - 子程序目前写不出来，卡在间接跳转上：`JMP` 的目标是立即数 `addr[7:0]`，没有"跳到寄存器里的地址"这种形式。返回地址就算存进了寄存器也跳不回去，而 ROM 只读、不能靠改写指令返回。（`docs/datapath.md` §2.7 的流水线寄存器也因此不传 PC 值。）
 - 栈可以纯软件搭：拿一个寄存器当 SP，`ST Rs,[Rs1]` 压栈、`LD Rd,[Rs1]` 弹栈，硬件一根线都不用改。
-- 要加间接跳转的话，编码上几乎零成本：`JMP` 的 `rs1` 槽（`[11:8]`）现在空着、opcode 还剩 5 个，`JMP Rs1` 与 `CALL addr` 直接就能编出来。要花的是通路上的功夫，三件事：① PC 的来源多一路 mux（现在只有 `PC+1` 与 `addr` 两路）；② 跳转目标改从寄存器来，取值口换到 A 前递 mux 之后、目标从 `ID/EX.Imm` 换成 `A_mux_out`（源就在 `rs1 [11:8]`，前递与停顿本来就逐字段盲比两个源槽，不用新增硬件，见 `docs/datapath.md` §5.1、§5.2）；③ 若还要 `CALL`，`PC+1` 得顺着流水线传到能写链接寄存器的那一级，四个级间寄存器都要加字段。
+- 要加间接跳转的话，编码上几乎零成本：`JMP` 的 `rs1` 槽（`[11:8]`）现在空着、能另立一族的保留 opcode 还有 4 个，`JMP Rs1` 与 `CALL addr` 直接就能编出来。要花的是通路上的功夫，三件事：① PC 的来源多一路 mux（现在只有 `PC+1` 与 `addr` 两路）；② 跳转目标改从寄存器来，取值口换到 A 前递 mux 之后、目标从 `ID/EX.Imm` 换成 `A_mux_out`（源就在 `rs1 [11:8]`，前递与停顿本来就逐字段盲比两个源槽，不用新增硬件，见 `docs/datapath.md` §5.1、§5.2）；③ 若还要 `CALL`，`PC+1` 得顺着流水线传到能写链接寄存器的那一级，四个级间寄存器都要加字段。
 - `CMP` 省不下东西：判零分支加 `SUB` 已经覆盖了它的用途。`SUB Rd,Rs1,Rs2` 一条指令同时给出差值和 C，紧跟 `BZ Rd,eq` 判的就是相等；`CMP` 只是"`SUB` 但不写回"，指令数一模一样。真机上 `CMP` 值得留，靠的不是算差值这个动作，而是它有地方可写：`CMP` 写的是标志寄存器，条件分支直接读标志、不读通用寄存器。这一条带来三件事：`SUB Rd,...` 总得先有一个空着的 `Rd`，标志不占通用寄存器；一次比较能被后面好几条条件分支接着用；结果进的是另一个资源，不挤通用寄存器的写口。本 ISA 没有标志寄存器这一路（`C` 是除寄存器堆、RAM、PC 之外唯一的架构状态位，见 §2），`BZ` / `BNZ` 判的也是通用寄存器里的值，所以在这里 `CMP` 与 `SUB` 没有区别。`CMP` 相对 `SUB` 省的只有"不写回"这一个动作，而本 ISA 没有标志寄存器可写——要让 `CMP` 编得出来，要么新开一个 opcode 并给 `RegWrite` 加一条"恒 0"的特例，要么拿一个真实寄存器当垃圾槽（没有恒零寄存器，见 §2）。真机上取代 `CMP` 的其实也不是 `SUB`，是比较并分支（MIPS / RISC-V / ARM64 的 `BEQ Rs1,Rs2,label`）：比较和分支合成一条指令，标志寄存器和垃圾槽都不用。本 ISA 的分支只判零、连两值相等都判不了，这才是这里的缺口；要加就加这个，编码上放得下（`Rs2` 正好占分支空着的 `rd` 槽），通路上的代价也只是在 EX 段多一个相等比较——两个源槽本来就各有一路前递 mux、停顿条件也本来就两个全比（`docs/datapath.md` §5.1、§5.2），现在判零借的是 ALU 现成的 `Zero`，改成比两值就得多配一个比较器。判大小也一样绕——C 已经被 `SUB` 算出来了，但没有按 C 走的分支，要判它得先把它搬进寄存器（`LDI R0,0` 紧跟 `ADC R0,R0,R0`，R0 就是 C），再 `BZ R0,...`。
 
 ### 字段位位置（bit 编号，23 = MSB）
@@ -177,7 +178,7 @@ R0 是普通寄存器：`LDI R0,#5` 合法，写进去就是 5。汇编器不禁
 硬约束只有两条：imm/addr 要占满连续的低 8 位，好让 `Inst[7:0]` 一根线直达 ROM / RAM 的地址脚和 `ALU.B`，不必移位拼接；三个寄存器号各占一个半字节（读口地址硬接线，见下）。剩下的是排布上的讲究：
 
 - op 与 fn 贴着放在最高 8 位。它们只喂译码器，另外 16 位（三个寄存器号加立即数）是数据。接线上两半不交叉：`Inst[23:16]` 进译码器，`Inst[15:0]` 进寄存器堆与 ALU。
-- op 占最高位，十六进制字面量与助记符同序：`0x003210` 从高位念下去就是 `op=0, fn=0, rd=3, rs1=2, rs2=1`，对着 `.lst` 调试时一眼能读。
+- op 占最高位，十六进制字面量与助记符同序：`0x103210` 从高位念下去就是 `op=1, fn=0, rd=3, rs1=2, rs2=1`，对着 `.lst` 调试时一眼能读。
 - fn 不能放低位，否则立即数就没有连续 8 位可用。
 
 ### 目标恒在 `[15:12]`，两条 store 的数据源各占自己的源槽
@@ -218,17 +219,17 @@ rs2 占高半字节 `[7:4]`，低半字节 `[3:0]` 留给将来的移位量。�
 ### 汇编编码公式（`<<` 为左移）
 
 ```
-ALUR :  word = (0x0<<20) | (fn<<16) | (rd<<12) | (rs1<<8) | (rs2<<4)
-ALUM :  word = (0x1<<20) | (fn<<16) | (rd<<12) | (rs1<<8) | imm
-LDA  :  word = (0x2<<20) | (rd<<12) | addr
-STA  :  word = (0x3<<20) | (rdata<<8) | addr          ; rdata = 数据源，住 rs1 槽
-LD   :  word = (0x4<<20) | (rd<<12) | (rs1<<8)
-ST   :  word = (0x5<<20) | (rs1<<8) | (rdata<<4)      ; rs1 = 地址寄存器，rdata = 数据源
-BZ   :  word = (0x6<<20) | (rs1<<8) | addr
-BNZ  :  word = (0x7<<20) | (rs1<<8) | addr
-JMP  :  word = (0x8<<20) | addr
-OUT  :  word = (0x9<<20) | (rs1<<8)
-HLT  :  word = (0xA<<20)
+ALUR :  word = (0x1<<20) | (fn<<16) | (rd<<12) | (rs1<<8) | (rs2<<4)
+ALUM :  word = (0x2<<20) | (fn<<16) | (rd<<12) | (rs1<<8) | imm
+LDA  :  word = (0x3<<20) | (rd<<12) | addr
+STA  :  word = (0x4<<20) | (rdata<<8) | addr          ; rdata = 数据源，住 rs1 槽
+LD   :  word = (0x5<<20) | (rd<<12) | (rs1<<8)
+ST   :  word = (0x6<<20) | (rs1<<8) | (rdata<<4)      ; rs1 = 地址寄存器，rdata = 数据源
+BZ   :  word = (0x7<<20) | (rs1<<8) | addr
+BNZ  :  word = (0x8<<20) | (rs1<<8) | addr
+JMP  :  word = (0x9<<20) | addr
+OUT  :  word = (0xA<<20) | (rs1<<8)
+HLT  :  word = (0xB<<20)
 ```
 
 ### 操作数在哪个槽：两读口对照
@@ -269,27 +270,27 @@ ST  Rs, [Rs1]     ; RAM[Rs1] ← Rs       Rs 在 [7:4]，是数据源
 ### 两个例子把上表钉死（十六进制取自 `asm.py` 的实际输出）
 
 ```
-ADD R3, R2, R1      →  0 | 0 | 3 | 2 | 1 | 0   =  0x003210
+ADD R3, R2, R1      →  1 | 0 | 3 | 2 | 1 | 0   =  0x103210
                        op  fn  rd  rs1 rs2 保留
 
     ReadAddrA = 2 = R2（rs1）      ReadAddrB = 1 = R1（rs2）
     rd = 3 = R3 只当写目标，本拍没有任何读口去读它
 
-ADD R1, R2, #5      →  1 | 0 | 1 | 2 | 0x05     =  0x101205
+ADD R1, R2, #5      →  2 | 0 | 1 | 2 | 0x05     =  0x201205
                        op  fn  rd  rs1  imm
 
-ST  R2, [R3]        →  5 | 0 | 0 | 3 | 2 | 0   =  0x500320
+ST  R2, [R3]        →  6 | 0 | 0 | 3 | 2 | 0   =  0x600320
                        op  fn  rd  rs1 rs2 保留
                            （0） 地址  数据
 
     ReadAddrA = 3 = R3（地址）     ReadAddrB = 2 = R2（写数据）
 
-STA R1, 0x2A        →  3 | 0 | 0 | 1 | 0x2A     =  0x30012A
+STA R1, 0x2A        →  4 | 0 | 0 | 1 | 0x2A     =  0x40012A
                        op  fn  rd  Rs  addr
                            （0）
 ```
 
-十六进制数字与字段逐位对得上：`0x003210` 从高位读下去就是 `op=0, fn=0, rd=3, rs1=2, rs2=1`。立即数型把低两 nibble 当成一个 8 位立即数（`0x101205` 的低字节 `05` 就是 5）。两条 store 的 `rd` 槽都是 0，因为它是写目标槽，而 store 不写寄存器。
+十六进制数字与字段逐位对得上：`0x103210` 从高位读下去就是 `op=1, fn=0, rd=3, rs1=2, rs2=1`。立即数型把低两 nibble 当成一个 8 位立即数（`0x201205` 的低字节 `05` 就是 5）。两条 store 的 `rd` 槽都是 0，因为它是写目标槽，而 store 不写寄存器。
 
 ## 5. ALU 运算（fn [19:16]，4 位）
 
@@ -315,20 +316,20 @@ ALU.B = BSrc ? imm[7:0] : B_mux_out           ← 前递 mux 输出再过一个 
 | 1000 | PASS.B | Result ← B（A 完全忽略） | Cout ← 0。用户侧助记符是 `LDI Rd,#imm`，以及 `LDA` / `STA` 的地址通路 |
 | 1001-1111 | 保留 | - | 留给移位等（见本节末） |
 
-- 寄存器型（`op=0000`）：B 取寄存器 `Rs2`。用 fn=0000-0110 就是 `ADD`/`ADC`/.../`XOR Rd,Rs1,Rs2`；用 fn=0111 就是 `MOV Rd,Rs1`（`Rs2` 编码为 0，被 PASS.A 忽略）。
-- 立即数型（`op=0001`）：`BSrc=1`，B 取 `imm[7:0]`。用 fn=0000-0110 就是 `ADD`/`ADC`/.../`XOR Rd,Rs1,#imm`；用 fn=1000 就是 `LDI Rd,#imm`（`Rs1` 编码为 0，被 PASS.B 忽略）。
+- 寄存器型（`op=0001`）：B 取寄存器 `Rs2`。用 fn=0000-0110 就是 `ADD`/`ADC`/.../`XOR Rd,Rs1,Rs2`；用 fn=0111 就是 `MOV Rd,Rs1`（`Rs2` 编码为 0，被 PASS.A 忽略）。
+- 立即数型（`op=0010`）：`BSrc=1`，B 取 `imm[7:0]`。用 fn=0000-0110 就是 `ADD`/`ADC`/.../`XOR Rd,Rs1,#imm`；用 fn=1000 就是 `LDI Rd,#imm`（`Rs1` 编码为 0，被 PASS.B 忽略）。
 
 `fn` 不是直接接到 ALU 上的，中间隔着译码器生成的控制信号 `ALUop`（§8）：
 
 ```
-ALUop = (op0|op1) ? fn : ((op2|op3) ? PASS.B : PASS.A)
+ALUop = (op1|op2) ? fn : ((op3|op4) ? PASS.B : PASS.A)
 ```
 
-`fn` 只出现在 `op0|op1` 那一支，所以上面这张 `fn` 表只管得到两个 ALU 族，其余指令送给 ALU 的是常量：
+`fn` 只出现在 `op1|op2` 那一支，所以上面这张 `fn` 表只管得到两个 ALU 族，其余指令送给 ALU 的是常量：
 
 | 指令 | `fn` 槽 | 送给 ALU 的 `ALUop` |
 |---|---|---|
-| 两个 ALU 族（`op=0000` / `0001`） | 0000-1000（有意义的码） | = `fn` |
+| 两个 ALU 族（`op=0001` / `0010`） | 0000-1000（有意义的码） | = `fn` |
 | `LDA` / `STA` | 0（保留） | `PASS.B`（1000，常量） |
 | 其余七条（`LD` `ST` `BZ` `BNZ` `JMP` `OUT` `HLT`） | 0（保留） | `PASS.A`（0111，常量） |
 
@@ -348,7 +349,7 @@ ALUop = (op0|op1) ? fn : ((op2|op3) ? PASS.B : PASS.A)
 
 逻辑运算只有 AND / OR / XOR，没有 NOT（RISC-V 也如此），需要时用 `XOR Rd,Rs,#0xFF`。不加 `NOT` 码不是因为没位置（`fn` 还剩 7 个码），而是它省不下东西：`XOR Rd,Rs1,#0xFF` 本来就是一条指令，专门的 `NOT` 既不省周期也不省指令，只多一个要译码、要验证的码。
 
-移位不占 `fn`：`fn` 还剩 `1001`-`1111` 七个码，但移位还需要移位量。寄存器型的低半字节 `[3:0]` 正好空着，`SLL Rd,Rs1,Rs2,amt` 可以直接用它；届时应利用保留 opcode（1011-1111）另立一族，并在 ALU 内加移位器。
+移位不占 `fn`：`fn` 还剩 `1001`-`1111` 七个码，但移位还需要移位量。寄存器型的低半字节 `[3:0]` 正好空着，`SLL Rd,Rs1,Rs2,amt` 可以直接用它；届时应利用保留 opcode（1100-1111）另立一族，并在 ALU 内加移位器。
 
 ### 进位与多字节算术
 
@@ -398,23 +399,23 @@ ALU 用一片 8 位加法器加操作数 B 取反选择（XOR 门）加进位入
 | ID | 译码 opcode 得到各控制信号（含 `CWrite`、`BranchZ`/`BranchNZ`/`Jump`）；两个读口按固定字段读寄存器堆（无地址 mux）；停顿检测（见 §9） |
 | EX | 两个前递 mux 选 ALU 的 A / B，store 的写数据从这两路里二选一；`BSrc` 选 `ALU.B`；ALU 运算；进位 C 在此更新，由 `CWrite` 门控（仅 ADD/ADC/SUB/SBC 才写）；BZ/BNZ 判零、JMP 决定跳转并驱动 flush 与 PC 目标 mux（见 §9） |
 | MEM | 数据 RAM 读写（LD/LDA 读，ST/STA 写） |
-| WB | MemToReg mux 选择写回值（RAM 读值或 ALU 结果）后写寄存器堆；写口用下降沿（见 §9 与 `docs/datapath.md` §2.1） |
+| WB | 写回 mux 按 `MemRead` 选择写回值（RAM 读值或 ALU 结果）后写寄存器堆；写口用下降沿（见 §9 与 `docs/datapath.md` §2.1） |
 
 IF/ID 就是 IR（指令寄存器）：本设计没有单独的 IR 元件，指令寄存器与 IF/ID 级间寄存器是同一个东西。ID 段的全部取用方（译码器、寄存器堆的两个读口、停顿检测）都直接从 `IF/ID.Inst` 接线。译码器虽然接的是完整 24 位 IR，但只有 `op[23:20]` 与 `fn[19:16]` 这 8 位参与控制信号的生成，另外 16 位分别是三个读口地址和立即数或地址，各有各的通路。扇出图与译码器画法见 `docs/datapath.md` §2.7、§3.8。
 
 ### `CWrite` 的生成式
 
 ```
-CWrite = (op == 0000 || op == 0001) && !fn[3] && !fn[2]
+CWrite = (op == 0001 || op == 0010) && !fn[3] && !fn[2]
 ```
 
 即只有 ADD/ADC/SUB/SBC 写 C（`fn[3:2]=00` 正好覆盖 `0000`-`0011`），`AND`/`OR`/`XOR`、`MOV`（PASS.A）、`LDI`（PASS.B）都不写。
 
 C 为什么需要一个写使能：ALU 每拍都在算，`Cout` 每拍都有值，执行 `AND` / `LDA` / `OUT` 时那个加法器照样在跑，吐出的进位是无效值。C 是架构状态，和寄存器堆（`RegWrite`）、数据 RAM（`MemWrite`）、PC（`PCWrite`）一样，只在指令明确声明要改它时才更新。少了这道门，C 就从"上一条加减指令的进位"退化成"上一拍 ALU 加法器的进位"，只有紧邻的 `ADD` 到 `ADC` 才碰巧一致（`add16.asm` 正是这个形状，所以它验不出这道门的作用）；中间夹一条 `ST` / `OUT` / `LDI` 就把进位冲掉了。
 
-`op == 0000 || op == 0001` 这个门不能省：`fn` 只在两个 ALU opcode 族里有意义，其余九条指令那个字段一律填 0。它们要用的地址或立即数住在 `[7:0]`，不在 `[19:16]`（§4 的位布局）。少了这个门，`STA Rs,addr` / `LD Rd,[Rs1]` / `JMP addr` 的 `fn=0000` 就会被当成 `ADD` 而误写 C。
+`op == 0001 || op == 0010` 这个门不能省：`fn` 只在两个 ALU opcode 族里有意义，其余九条指令那个字段一律填 0。它们要用的地址或立即数住在 `[7:0]`，不在 `[19:16]`（§4 的位布局）。少了这个门，`STA Rs,addr` / `LD Rd,[Rs1]` / `JMP addr` 的 `fn=0000` 就会被当成 `ADD` 而误写 C。
 
-`ALUop` 与 `CWrite` 是两个独立信号：`ALUop` 说 ALU 这一拍干什么，`CWrite` 说结果要不要进 C。两道门各管一批指令：`LDA` / `STA` / `LD` / `ST` / `OUT` 的 `fn` 槽是保留的 0（译码器给它们的 `ALUop` 是 `PASS.B` / `PASS.A`，那是生成出来的控制值、不是指令里的位），挡住它们的是 `op` 门；`MOV`（`fn=0111`）和 `LDI`（`fn=1000`）的 `op` 是 `0000` / `0001`、过得了 `op` 门，拦住它们的是 `!fn[3] && !fn[2]`。合起来才刚好是 ADD/ADC/SUB/SBC，不需要"虽然不运算但必须手工把 `CWrite` 置 0"这类特判。
+`ALUop` 与 `CWrite` 是两个独立信号：`ALUop` 说 ALU 这一拍干什么，`CWrite` 说结果要不要进 C。两道门各管一批指令：`LDA` / `STA` / `LD` / `ST` / `OUT` 的 `fn` 槽是保留的 0（译码器给它们的 `ALUop` 是 `PASS.B` / `PASS.A`，那是生成出来的控制值、不是指令里的位），挡住它们的是 `op` 门；`MOV`（`fn=0111`）和 `LDI`（`fn=1000`）的 `op` 是 `0001` / `0010`、过得了 `op` 门，拦住它们的是 `!fn[3] && !fn[2]`。合起来才刚好是 ADD/ADC/SUB/SBC，不需要"虽然不运算但必须手工把 `CWrite` 置 0"这类特判。
 
 `CWrite` 随 ID/EX 锁存，气泡时也必须清零，详见 `docs/datapath.md` §2.3、§5。
 
@@ -425,35 +426,37 @@ C 为什么需要一个写使能：ALU 每拍都在算，`Cout` 每拍都有值�
 | RegWrite | 写寄存器堆使能 |
 | CWrite | 进位标志 C 的写使能：仅 ADD/ADC/SUB/SBC 为 1 |
 | BSrc | 1 = ALU 的 B 输入选立即数或地址；0 = 选寄存器 B 口读数 |
-| ALUop[3:0] | ALU 功能码。它是译码器生成的控制值，不是 `fn` 字段本身：`op0\|op1` 时等于 `fn`，其余九条由两级 mux 落成 `PASS.B`（`LDA` / `STA`）或 `PASS.A`（见下表与本节末）。所以"非 ALU 指令的 `fn` 槽填 0"不等于"它们做加法" |
-| MemRead / MemWrite | 本条要读 / 要写数据 RAM。`MemWrite` 直接接 RAM 的写使能脚；`MemRead` 不接 RAM，因为 RAM 读是组合逻辑、本设计里没有要用它驱动的脚（`docs/datapath.md` §2.5）。它是给 load-use 停顿（`stall = ID_EX.MemRead && dep`）用的标志，并恒等于 `MemToReg`（一个门扇出两根线） |
-| MemToReg | 1 = 写回值选 RAM 读值；0 = 选 ALU 结果。这个 mux 不能省：`LDA` / `LD` 的 `ALUResult` 是访存地址，数据在 `MemData` 里，少了它 `LD R1,[R2]` 写回的是地址而不是那个地址里的数。前递单元也读这一位：`EX/MEM` 里装着 load 时它的写回值还没出来，优先级 1 的命中条件因此带 `!EX/MEM.MemToReg`（`docs/datapath.md` §4）。`STA` / `ST` 该位填 `-`（无关），因为它们 `RegWrite=0`，mux 选什么都写不进寄存器堆 |
+| ALUop[3:0] | ALU 功能码。它是译码器生成的控制值，不是 `fn` 字段本身：`op1\|op2` 时等于 `fn`，其余九条由两级 mux 落成 `PASS.B`（`LDA` / `STA`）或 `PASS.A`（见下表与本节末）。所以"非 ALU 指令的 `fn` 槽填 0"不等于"它们做加法" |
+| MemRead | 本条要读数据 RAM（`LDA` / `LD`）。它不接 RAM 的任何脚——RAM 读是组合逻辑、常开，本设计里没有要用它驱动的脚（`docs/datapath.md` §2.5）。它的用处全在下游：ID 段的停顿判据 `stall = ID_EX.MemRead && dep`，与 WB 段写回 mux 的选择端（1 = 取 RAM 读值，0 = 取 ALU 结果）。这个 mux 不能省：`LDA` / `LD` 的 `ALUResult` 是访存地址，数据在 `MemData` 里，少了它 `LD R1,[R2]` 写回的是地址而不是那个地址里的数。前递单元也读这一位：`EX/MEM` 里装着 load 时它的写回值还没出来，优先级 1 的命中条件因此带 `!EX/MEM.MemRead`（`docs/datapath.md` §4） |
+| MemWrite | 本条要写数据 RAM（`STA` / `ST`）。接 RAM 的写使能脚，但要与全局停机使能相与：`MemWrite && ClockEnable`，不是裸的这一位（`docs/datapath.md` §1） |
 | BranchZ / BranchNZ | BZ / BNZ 使能 |
 | Jump | JMP 使能 |
 | OutEn | OUT 输出使能 |
 | Halt | 停机。要随流水线一路锁存到 `MEM/WB`，在那里取用才生效（见本节末） |
 
-访存为什么不用一根线表示：因为有三种状态。`LDA` / `LD` 读、`STA` / `ST` 写、其余 11 条两样都不是（信号是按指令译码的，不是按阶段取的）。一位线编码不了三态，硬拿它当"读还是写"的选择位，就还得再配一根"这条是不是访存"。何况这两根线本来就不对称：`MemWrite` 是 RAM 的真引脚，`MemRead` 只是随流水线传下去的"结果要迟一拍"标记。能合并的那一半已经合并了，即 `MemRead` 恒等于 `MemToReg`，译码器里就是一个 `op2|op4` 或门扇出两根线（`docs/datapath.md` §3.8）。两个名字是因为取用的位置不同：`MemRead` 只在 ID 段的停顿检测里用（§2.7 的字段表里 `MEM/WB` 没有它）；`MemToReg` 要一路锁存到 `MEM/WB` 当写回 mux 的选择端，同一份值在 `EX/MEM` 上又被前递单元读去做优先级 1 的排除项（`docs/datapath.md` §4）。
+访存为什么不用一根线表示：因为有三种状态。`LDA` / `LD` 读、`STA` / `ST` 写、其余 11 条两样都不是（信号是按指令译码的，不是按阶段取的）。一位线编码不了三态，硬拿它当"读还是写"的选择位，就还得再配一根"这条是不是访存"。何况这两根线本来就不对称：`MemWrite` 是 RAM 的真引脚，`MemRead` 不接 RAM 的任何脚、只是随流水线传下去的标记。
+
+而"读"这一态内部不再分线：读 RAM 这件事在下游有三个用途——ID 段的停顿判据、WB 段写回 mux 的选择端、EX 段前递优先级 1 的排除项——三处要的是同一个值，所以译码器里就是一个 `op3|op5` 或门、一个名字 `MemRead`、流水线寄存器里一位（`docs/datapath.md` §3.8、§2.7）。
 
 逐条指令控制信号。`-` 表示无关，设计上取 0：
 
-| 指令 | RegWrite | CWrite | BSrc | ALUop | MemRead | MemWrite | MemToReg | BranchZ | BranchNZ | Jump | OutEn | Halt |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `ADD/ADC/SUB/SBC Rd,Rs1,Rs2` | 1 | 1 | 0 | fn | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `AND/OR/XOR Rd,Rs1,Rs2` | 1 | 0 | 0 | fn | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `MOV Rd,Rs1` | 1 | 0 | 0 | PASS.A | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `ADD/ADC/SUB/SBC Rd,Rs1,#imm` | 1 | 1 | 1 | fn | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `AND/OR/XOR Rd,Rs1,#imm` | 1 | 0 | 1 | fn | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `LDI Rd,#imm` | 1 | 0 | 1 | PASS.B | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `LDA Rd,addr` | 1 | 0 | 1 | PASS.B | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `STA Rs,addr` | 0 | 0 | 1 | PASS.B | 0 | 1 | - | 0 | 0 | 0 | 0 | 0 |
-| `LD Rd,[Rs1]` | 1 | 0 | 0 | PASS.A | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `ST Rs,[Rs1]` | 0 | 0 | 0 | PASS.A | 0 | 1 | - | 0 | 0 | 0 | 0 | 0 |
-| `BZ Rs1,addr` | 0 | 0 | - | PASS.A | 0 | 0 | - | 1 | 0 | 0 | 0 | 0 |
-| `BNZ Rs1,addr` | 0 | 0 | - | PASS.A | 0 | 0 | - | 0 | 1 | 0 | 0 | 0 |
-| `JMP addr` | 0 | 0 | - | PASS.A | 0 | 0 | - | 0 | 0 | 1 | 0 | 0 |
-| `OUT Rs1` | 0 | 0 | 0 | PASS.A | 0 | 0 | - | 0 | 0 | 0 | 1 | 0 |
-| `HLT` | 0 | 0 | - | PASS.A | 0 | 0 | - | 0 | 0 | 0 | 0 | 1 |
+| 指令 | RegWrite | CWrite | BSrc | ALUop | MemRead | MemWrite | BranchZ | BranchNZ | Jump | OutEn | Halt |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `ADD/ADC/SUB/SBC Rd,Rs1,Rs2` | 1 | 1 | 0 | fn | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `AND/OR/XOR Rd,Rs1,Rs2` | 1 | 0 | 0 | fn | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `MOV Rd,Rs1` | 1 | 0 | 0 | PASS.A | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `ADD/ADC/SUB/SBC Rd,Rs1,#imm` | 1 | 1 | 1 | fn | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `AND/OR/XOR Rd,Rs1,#imm` | 1 | 0 | 1 | fn | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `LDI Rd,#imm` | 1 | 0 | 1 | PASS.B | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `LDA Rd,addr` | 1 | 0 | 1 | PASS.B | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `STA Rs,addr` | 0 | 0 | 1 | PASS.B | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `LD Rd,[Rs1]` | 1 | 0 | 0 | PASS.A | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `ST Rs,[Rs1]` | 0 | 0 | 0 | PASS.A | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `BZ Rs1,addr` | 0 | 0 | - | PASS.A | 0 | 0 | 1 | 0 | 0 | 0 | 0 |
+| `BNZ Rs1,addr` | 0 | 0 | - | PASS.A | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
+| `JMP addr` | 0 | 0 | - | PASS.A | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
+| `OUT Rs1` | 0 | 0 | 0 | PASS.A | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
+| `HLT` | 0 | 0 | - | PASS.A | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
 
 表里 `BZ` / `BNZ` / `JMP` / `HLT` 的 `ALUop` 是 `PASS.A` 而不是 0：生成式对它们只能落出 `PASS.A`（见 `docs/datapath.md` §3.8）。它们不写寄存器、不写 RAM、不输出，`Result` 去哪都没人接，所以取值无所谓，但照本表接线时就接 `PASS.A`，别接 0。
 
@@ -463,18 +466,19 @@ C 为什么需要一个写使能：ALU 每拍都在算，`Cout` 每拍都有值�
 
 | opcode | 指令 | 打开的信号 |
 |---|---|---|
-| 0000 | ALU 寄存器型（7 条运算 + `MOV`） | RegWrite；CWrite（仅 `fn[3:2]=00`）；ALUop = `fn` |
-| 0001 | ALU 立即数型（7 条运算 + `LDI`） | RegWrite, BSrc；CWrite（仅 `fn[3:2]=00`）；ALUop = `fn` |
-| 0010 | `LDA` | RegWrite, BSrc, MemRead, MemToReg, ALUop=PASS.B |
-| 0011 | `STA` | MemWrite, BSrc, ALUop=PASS.B |
-| 0100 | `LD` | RegWrite, MemRead, MemToReg, ALUop=PASS.A |
-| 0101 | `ST` | MemWrite, ALUop=PASS.A |
-| 0110 | `BZ` | BranchZ |
-| 0111 | `BNZ` | BranchNZ |
-| 1000 | `JMP` | Jump |
-| 1001 | `OUT` | OutEn, ALUop=PASS.A |
-| 1010 | `HLT` | Halt |
-| 1011-1111 | 保留 | 全 0（等效无操作，见 `docs/datapath.md` §3.8） |
+| 0000 | 保留 | 全 0（空操作，见 `docs/datapath.md` §3.8、§10） |
+| 0001 | ALU 寄存器型（7 条运算 + `MOV`） | RegWrite；CWrite（仅 `fn[3:2]=00`）；ALUop = `fn` |
+| 0010 | ALU 立即数型（7 条运算 + `LDI`） | RegWrite, BSrc；CWrite（仅 `fn[3:2]=00`）；ALUop = `fn` |
+| 0011 | `LDA` | RegWrite, BSrc, MemRead, ALUop=PASS.B |
+| 0100 | `STA` | MemWrite, BSrc, ALUop=PASS.B |
+| 0101 | `LD` | RegWrite, MemRead, ALUop=PASS.A |
+| 0110 | `ST` | MemWrite, ALUop=PASS.A |
+| 0111 | `BZ` | BranchZ |
+| 1000 | `BNZ` | BranchNZ |
+| 1001 | `JMP` | Jump |
+| 1010 | `OUT` | OutEn, ALUop=PASS.A |
+| 1011 | `HLT` | Halt |
+| 1100-1111 | 保留 | 全 0（等效无操作，见 `docs/datapath.md` §3.8） |
 
 ### 几条实现说明
 
@@ -524,8 +528,8 @@ C 为什么需要一个写使能：ALU 每拍都在算，`Cout` 每拍都有值�
 
 ## 10. 未编程 ROM 行为
 
-未 Load 的 ROM 地址读出 `0x000000`，即 `op=0000 fn=0000 rd=0 rs1=0 rs2=0`，也就是 `ADD R0,R0,R0`。它会执行 `R0 ← R0+R0` 并把进位写进 C（它的 `CWrite` 是 1），不是"什么都不做"。这条指令只在 PC 跑出程序范围时才会取到，程序末尾有 `HLT` 就到不了那里，所以无害；但别把它当 NOP 用，尤其别拿全 0 去灌流水线里的空指令：分支 flush 灌进 `IF/ID` 的常量必须是保留 opcode（`docs/datapath.md` §6），否则每跳一次就写坏一次 R0 和 C。程序末尾仍建议显式 `HLT`。
+未 Load 的 ROM 地址读出 `0x000000`，即 `op=0000`。`0000` 是保留码，译码器里那根线一根门都不接，译出的控制位全 0——不写寄存器堆、不写 RAM、不写 C，是空操作。PC 照常加下去，所以程序跑过末尾不会改坏任何状态，但也停不下来；末尾仍要显式 `HLT`。
 
-想在程序里空一拍，用 `MOV Rd,Rd`（自己搬给自己）：值不变、`CWrite=0` 不碰 C，只占一个周期。汇编器没有 `NOP` 助记符，保留 opcode 是给硬件内部用的（分支 flush 灌进 `IF/ID` 的常量），程序里写不出来；也别用 `ADD Rd,Rd,#0` 凑，它是 ADD、会写 C。
+全 0 被译成空操作是刻意的，不是巧合：`IF/ID` 就是指令寄存器（§7），而它在本设计里是一个普通 Register，只有异步清零端，复位能给出的值只有 0（`docs/datapath.md` §1）。0 一定会被译码，那就让它什么都不做。这也是 `op=0000` 空着不接的原因：原来占它的 ALU 寄存器族让位到 `0001`，其余各族跟着后移一位。分支 flush 灌进 `IF/ID` 的常量同样是全 0（`docs/datapath.md` §6），不必再另外准备一个保留常量。
 
-把全 0 定义成 NOP 也不行：`ADD` 的 `CWrite` 是 1，就算 R0 恒零，`ADD R0,R0,R0` 照样把进位写进 C。要堵住得再给 `CWrite` 加一道 `rd≠0` 的门——为省一个常量 mux 多一道门、多一条要记的规则，不划算。
+想在程序里空一拍，用 `MOV Rd,Rd`（自己搬给自己）：值不变、`CWrite=0` 不碰 C，只占一个周期。汇编器没有 `NOP` 助记符，`0x000000` 编不出来；也别用 `ADD Rd,Rd,#0` 凑，它是 ADD、会写 C。
