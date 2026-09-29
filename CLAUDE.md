@@ -25,7 +25,7 @@
 ## 常用命令
 
 ```powershell
-# 自检：20 条黄金字节断言 + 标签解析 + 边界检查。全部通过 → 退出码 0、打印"全部通过"
+# 自检：33 条黄金字节断言 + 标签解析 + 边界检查。全部通过 → 退出码 0、打印"全部通过"
 python asm\asm.py --selftest
 
 # 汇编：生成 <前缀>.lst（清单）+ <前缀>.mem（Logisim ROM 镜像，v2.0 raw，每字 6 位十六进制）
@@ -44,11 +44,13 @@ python asm\asm.py examples\fib.asm
 指令字段：`op[23:20]` `fn[19:16]` `rd[15:12]` `rs1[11:8]` `X[7:0]`
 
 - `op=0000` 空着不接任何门：全 0 字（复位后的 `IF/ID`、分支 flush 灌的字）就是它，译出控制位全 0 = 空操作。
-- `op=0001`（ALU 寄存器型）→ `X = {rs2[3:0], 4'b0000}`，即 `rs2` 在 `[7:4]`，`[3:0]` 保留 0（留给将来的移位量）。
+- `op=0001`（ALU 寄存器型）→ `X = {rs2[3:0], 4'b0000}`，即 `rs2` 在 `[7:4]`，`[3:0]` 保留、汇编器一律编 0。移位量不走这一格：它占的是 B 口，与 `ADD` 的第二个源同位置（见下）。
 - `op=0010`（ALU 立即数型）→ `X = imm[7:0]`，立即数整格。
-- 其余指令 `[19:16]` 是保留的 0；`imm/addr` 恒在 `[7:0]`。两种 `X` 由 `op` 互斥决定，`[7:0]` 不存在"既是 rs2 又是立即数"的位。
+- `op=1100`（`LD Rd,[Rs1+#off]`）→ `X = off[7:0]`，无符号偏移整格，加在 `Rs1` 上按 256 取模。`ALUop` 是译码器造的常量 `ADD`，`ALUResult = Rs1 + off` 直接当访存地址（判据 `examples/ld_offset.asm`）。
+- `op=1101`（`JMP Rs1`）→ `X` 是保留的 0，跳转目标住在 `rs1 [11:8]`。`ALUop` 落成 `PASS.A`，把它经 A 前递 mux 送到 PC 的目标 mux；`JumpReg` 与 `Jump` 同等驱动两处 flush、只在"目标值从 `Imm` 还是从 A 口来"分岔（判据 `examples/jmp_reg.asm`）。
+- 其余指令 `[19:16]` 是保留的 0；`imm/addr/off` 恒在 `[7:0]`。三种 `X` 由 `op` 互斥决定，`[7:0]` 不存在"既是 rs2 又是立即数"的位。
 
-**操作数位置统一**：`rd[15:12]` 是写目标、全 ISA 只写不读；源只可能在 `rs1[11:8]` 与 `rs2[7:4]`。两条 store 的数据源借自己空着的那个源槽——`STA Rs,addr` 的在 `[11:8]`（地址占 `[7:0]`）、`ST Rs,[Rs1]` 的在 `[7:4]`（地址占 `[11:8]`）。`[11:8]` 还是地址寄存器与 `BZ`/`BNZ` 的判零源。
+**操作数位置统一**：`rd[15:12]` 是写目标、全 ISA 只写不读；源只可能在 `rs1[11:8]` 与 `rs2[7:4]`。两条 store 的数据源借自己空着的那个源槽——`STA Rs,addr` 的在 `[11:8]`（地址占 `[7:0]`）、`ST Rs,[Rs1]` 的在 `[7:4]`（地址占 `[11:8]`）。`[11:8]` 还是地址寄存器、`BZ`/`BNZ` 的判零源，以及 `JMP Rs1` 的跳转目标。
 
 **两读口、地址硬接线**：A/B 两个读口固定接 `Inst[11:8]` / `Inst[7:4]`，译码里没有任何读口地址 mux。因此两套比较网络直接比字段，不必先算"这一拍在读谁"：
 
@@ -62,13 +64,15 @@ python asm\asm.py examples\fib.asm
 ```
 dep       = ID_EX.RegWrite && (ID_EX.rd==Inst[11:8] || ==Inst[7:4])
 ALU.A     = A_mux_out                                    ; 只有前递 mux 这一级，别写成 ReadDataA
-ALU.B     = BSrc ? Imm : B_mux_out                       ; 后面还有一级；BSrc = op1|op2|op3
+ALU.B     = BSrc ? Imm : B_mux_out                       ; 后面还有一级；BSrc = op1|op2|op3|op12
 WriteData = (MemWrite && BSrc) ? A_mux_out : B_mux_out   ; 选择端恰好只有 STA 为真
 ```
 
 `A_mux_out` / `B_mux_out` 是两个前递 mux 的输出，不是寄存器堆的原始读数。判据一律用 `RegWrite`，不是 `rd≠0`——R0 是可写寄存器，`rd=0` 不等于"不写"。
 
-**`fn` 有 9 个有效码，两个是 ALU 直通**：`0111 = PASS.A`（`Result ← A`，供 `MOV`/`LD`/`ST`/`OUT`）、`1000 = PASS.B`（`Result ← B`，供 `LDI`/`LDA`/`STA`）。方向判的是"这条指令要送出的那个值在哪一侧"——`ST` 的地址寄存器在 A（`PASS.A`）、`STA` 的地址是立即数挂在 B（`PASS.B`）；两条 store 的数据源与 `PASS` 无关，它只是路过 A / B 就被写数据 mux 分流走。接反了不报错，只是送出的变成另一侧的值。
+**`fn` 有 14 个有效码，两个是 ALU 直通，五个是移位**：`0111 = PASS.A`（`Result ← A`，供 `MOV`/`LD`/`ST`/`OUT`，以及 `JMP Rs1` 把 A 口的跳转目标送到 PC）、`1000 = PASS.B`（`Result ← B`，供 `LDI`/`LDA`/`STA`）；`1001`-`1011 = SLL`/`SRL`/`SRA`、`1100`/`1101 = SLC`/`SRC`。方向判的是"这条指令要送出的那个值在哪一侧"——`ST` 的地址寄存器在 A（`PASS.A`）、`STA` 的地址是立即数挂在 B（`PASS.B`）；两条 store 的数据源与 `PASS` 无关，它只是路过 A / B 就被写数据 mux 分流走。接反了不报错，只是送出的变成另一侧的值。
+
+**五条移位不占新 opcode，就住在这两族的 `fn` 槽里**，所以通路形状与 `ADD` 完全一样：数据在 A 口、移位量在 B 口（寄存器型取 `Rs2`、立即数型取 `imm[7:0]`），前递与停顿一条都不用改（`docs/isa.md` §5、`docs/datapath.md` §2.2）。三个容易接错处：移位量在 `ALU.B` 上取（接在 `BSrc` 之前的话立即数型拿不到）；移位数只有低三位进移位器，`S = B[7]|B[6]|B[5]|B[4]|B[3]` 另走一条五输入或门（`S=1` 就是"整字节移空"：逻辑移位给 `0x00`、`SRA` 给 `{8{A[7]}}`），少了它 `#8` 会被当成移 0 位；`SLC`/`SRC` 固定移 1 位、不进移位器，只是两根拼线（`{A[6:0],Cin}` / `{Cin,A[7:1]}`），`Cout` 取 `A[7]` / `A[0]`。ALU 的 `Cout` 掩码也要跟着放宽成 `~(ALUop[3] ^ ALUop[2])`——加移位之前它只放行 `fn[3:2]=00`，不改的话 `SLC`/`SRC` 移出去的那一位会被封住（`shift_carry.asm` → `0xFD`）。移位量范围是 0-7，0 合法（不移），8 及以上按方向饱和、不取模。判据：`examples/shift.asm` → `0x96`、`examples/shift_carry.asm` → `0x7E`。
 
 ## 冒险规则（最容易搞错的地方）
 
@@ -81,7 +85,7 @@ WriteData = (MemWrite && BSrc) ? A_mux_out : B_mux_out   ; 选择端恰好只有
 | **写 Rd 的那条不是 load** | A/B 前递，源 `EX/MEM` | A/B 前递，源 `MEM/WB` | **寄存器堆下降沿写** | 寄存器堆 |
 | **写 Rd 的那条是 load** | **停顿 1 拍**，再从 `MEM/WB` 前递 | A/B 前递，源 `MEM/WB` | **寄存器堆下降沿写** | 寄存器堆 |
 
-读 Rd 的那条包括 ALU 族、`LD`/`ST`/`STA`/`OUT`，以及 `BZ`/`BNZ`——判零在 EX 段做，操作数走同一个 A 前递 mux，与 ALU 族同一拍、同一级取用，所以全 ISA 只有这一张表。`LDI`/`LDA` 一个寄存器都不读，不在其列。**分支不需要任何额外规则**：写 Rd 的那条是 load 时它照样吃第二行那 1 拍停顿，而"分支判零"本身不再是一类独立冒险。
+读 Rd 的那条包括 ALU 族、`LD`/`ST`/`STA`/`OUT`、`BZ`/`BNZ`，以及 `JMP Rs1`——判零与取跳转目标都在 EX 段做，操作数走同一个 A 前递 mux，与 ALU 族同一拍、同一级取用，所以全 ISA 只有这一张表。`LDI`/`LDA` 一个寄存器都不读，不在其列。**分支不需要任何额外规则**：写 Rd 的那条是 load 时它照样吃第二行那 1 拍停顿，而"分支判零"本身不再是一类独立冒险。
 
 `k` 是运行时距离：停顿让读 Rd 的那条被冻住、写 Rd 的那条继续前进，taken 分支还会作废两条已取的指令，两者都把 `k` 拉长。
 
@@ -89,14 +93,14 @@ WriteData = (MemWrite && BSrc) ? A_mux_out : B_mux_out   ; 选择端恰好只有
 
 1. **寄存器堆写口是下降沿**——全设计**唯一**一处时钟反相。看似无用（搭建第 1 步完全看不出差别），但没有它 k=3 就错。别"顺手改回上升沿"。
 2. **分支操作数取自 §4 那两个 A/B 前递 mux 里的 A 口那一个，没有第三套 mux**。它吃的是那个 mux 的优先级 1（`EX/MEM`，命中条件里要排除 `EX/MEM.MemRead`——这条要写回的是 RAM 读值，此刻还没出来）与优先级 2（`MEM/WB`）——与 ALU 族同一套，没有分支专用的取值网络。接漏任一级时分支读到旧值，误判"跳/不跳"（`hazard_branch` → `0x10`，`hazard_k2branch` → `0x10`）。
-3. **taken 时 `IF/ID` 与 `ID/EX` 两处都要清**。判定在 EX，比 ID 晚一拍，已经在飞的有两条顺落指令：`IF/ID` 里那条灌全 0（保留码 `op=0000`，译出控制位全 0；它还要**压过 `IF_IDWrite=0`**），`ID/EX` 的 D 端清零（复用气泡 mux，选择端 `stall || branch_taken || ID_EX.Jump`）。只清一头，另一条会晚一拍照样执行完（`hazard_flush.asm` → `0x11` / `0x22`）。
+3. **taken 时 `IF/ID` 与 `ID/EX` 两处都要清**。判定在 EX，比 ID 晚一拍，已经在飞的有两条顺落指令：`IF/ID` 里那条灌全 0（保留码 `op=0000`，译出控制位全 0；它还要**压过 `IF_IDWrite=0`**），`ID/EX` 的 D 端清零（复用气泡 mux，选择端 `stall || branch_taken || ID_EX.Jump || ID_EX.JumpReg`）。只清一头，另一条会晚一拍照样执行完（`hazard_flush.asm` → `0x11` / `0x22`）。
 4. **load→分支停 1 拍就够**，与 load-use 是同一条规则（`stall = ID_EX.MemRead && dep`）——它不区分读 Rd 的那条是不是分支，**别为分支另写一条停顿条件**。另：`branch_taken` 与 flush **不需要 `&& !stall`**，`stall` 的前提 `ID_EX.MemRead` 在分支占着 `ID/EX` 的那一拍恒为 0（`datapath.md` §5.1）。
 5. **气泡要把 `ID/EX.RegWrite` 和控制位一起清 0**。只清控制信号的话，残值会让停顿条件误触发。
-6. **`CWrite = (op == 0001 || op == 0010) && !fn[3] && !fn[2]`**——只有 ADD/ADC/SUB/SBC 写 C。必须带 `op` 门：`fn` 槽每条指令都有，非 ALU 指令把它编成 0，少了这个门，`LDA`/`STA`/`LD`/`ST`/`BZ`/`BNZ`/`JMP`/`OUT`/`HLT` 九条会被当成 ADD 误写 C。气泡也必须清 `CWrite`，否则垃圾进位写进 C。
+6. **`CWrite = (op == 0001 || op == 0010) && ((!fn[3] && !fn[2]) || (fn[3] && fn[2] && !fn[1]))`**——只有 ADD/ADC/SUB/SBC 与 `SLC`/`SRC` 写 C。必须带 `op` 门：`fn` 槽每条指令都有，非 ALU 指令把它编成 0，少了这个门，`LDA`/`STA`/`LD`（两种形式）/`ST`/`BZ`/`BNZ`/`JMP`（两种形式）/`OUT`/`HLT` 这十一条形式会被当成 ADD 误写 C。**`op` 门里不能加 `op12`**：`LD` 偏移型的 `ALUop` 虽然是 `ADD`，但它不写 C（`ADD` 这个常量是译码器造的，与 `CWrite` 无关）。`fn` 那半段分两块，分界是"移进来的位从哪来"：`SLL`/`SRL`/`SRA`（`10xx`）移进来的位是常量或 `A[7]`、与 C 无关，所以不写；`1110`/`1111` 两个保留码也不写。气泡也必须清 `CWrite`，否则垃圾进位写进 C。
 7. **`SUBC` 语义是 `a - b - (1 - Cin)`，且 `SUB`/`SBC` 的 C 是"1=无借位"**（即 C=0 表示借位）。容易写反。
 8. **插停顿和 taken 分支都会改变后面读 Rd 的那条的有效距离**。一条停顿让写 Rd 的那条继续前进而读 Rd 的那条被冻住；taken 分支在 EX 判定、每跳一次作废两条已取的指令。两者都会让"静态 k"与运行时不符。**别靠静态数间隔判断有没有冒险**：`sum1to10.asm` 的循环体每轮末尾那次 taken 的 `BNZ` 要作废 2 条，静态相隔 3 条的源寄存器实际是 k=5。
-9. **误停无害**：`dep` 比较两个源槽，**没有一格是"永远为源"的**——`[7:4]` 在 `LDA`/`STA`/`BZ`/`BNZ` 里是地址的高半字节、在立即数型/`LDI` 里是立即数的高半字节；`[11:8]` 在 `LDI`/`LDA`/`JMP`/`HLT` 里按约定编 0。所以 `LD R0,[R2]` 紧跟 `LDI R1,0x50`（后者的 `[11:8]`=0）会假判依赖、多停 1 拍。`[15:12]` 已经不比了——它只写不读。**只损失周期，不损失正确性**，且花周期的只有一处：写 Rd 的那条是 load，每次 1 拍。**不要为它加指令类型特判**——`dep` 的逐字段盲比使它成为**真实依赖集的超集 ⇒ 永不漏停**，加门等于把这个性质换成"可能漏停的正确性风险"。
-10. **`PASS.A` / `PASS.B` 别用反**。`MOV`/`LD`/`ST`/`OUT` 的**地址/显示值**在 A 口（`[11:8]`）→ `PASS.A`；`LDI`/`LDA`/`STA` 的**立即数/绝对地址**挂在 `BSrc` 的 B 侧 → `PASS.B`。接反了不报错，只是搬运的是另一侧的值（A 侧那份往往是垃圾）。**判的是"这条指令要搬的那个值在哪一侧"**——两条 store 还有第二个寄存器（数据源）在另一侧，它不经过 ALU，别拿它去定 `PASS` 方向。
+9. **误停无害**：`dep` 比较两个源槽，**没有一格是"永远为源"的**——`[7:4]` 在 `LDA`/`STA`/`BZ`/`BNZ` 里是地址的高半字节、在立即数型/`LDI` 里是立即数的高半字节、在 `LD` 偏移型里是 `off` 的高半字节；`[11:8]` 在 `LDI`/`LDA`/`JMP addr`/`HLT` 里按约定编 0（`JMP Rs1` 的 `[11:8]` 是跳转目标，那是它唯一真正的源）。所以 `LD R0,[R2]` 紧跟 `LDI R1,0x50`（后者的 `[11:8]`=0）会假判依赖、多停 1 拍。`[15:12]` 已经不比了——它只写不读。**只损失周期，不损失正确性**，且花周期的只有一处：写 Rd 的那条是 load，每次 1 拍。**不要为它加指令类型特判**——`dep` 的逐字段盲比使它成为**真实依赖集的超集 ⇒ 永不漏停**，加门等于把这个性质换成"可能漏停的正确性风险"。
+10. **`PASS.A` / `PASS.B` 别用反**。`MOV`/`LD`/`ST`/`OUT` 的**地址/显示值**在 A 口（`[11:8]`）→ `PASS.A`；`LDI`/`LDA`/`STA` 的**立即数/绝对地址**挂在 `BSrc` 的 B 侧 → `PASS.B`。接反了不报错，只是搬运的是另一侧的值（A 侧那份往往是垃圾）。**判的是"这条指令要搬的那个值在哪一侧"**——两条 store 还有第二个寄存器（数据源）在另一侧，它不经过 ALU，别拿它去定 `PASS` 方向。`JMP Rs1` 的跳转目标在 A 口，所以也是 `PASS.A`。**`LD Rd,[Rs1+#off]` 两样都不用**：它的 `ALUop` 是常量 `ADD`，两个操作数一个在 A（基址）、一个在 B（`off`），不像其余那些走 `PASS.A` / `PASS.B` 的指令那样只搬一侧。
 
 ## 验证：哪些程序能当判据
 
@@ -109,9 +113,11 @@ WriteData = (MemWrite && BSrc) ? A_mux_out : B_mux_out   ; 选择端恰好只有
 | 前递优先级 2（`MEM/WB` 那一路） | `examples/hazard_k2branch.asm` → `5`（最干净的一条）；`examples/hazard_k2.asm` → RAM `0x40`/`0x41`/`0x42` = `0xA1`/`0xB2`/`0x2A`（第 6 步就能跑：不用分支、不用 OUT）；`examples/hazard_branch.asm` → `0x00`；`examples/hazard_loadbranch.asm` → `0x20` |
 | load-use | `examples/square_lookup.asm` → `9` |
 | load→分支（同一条停顿规则） | `examples/hazard_loadbranch.asm` → `0x05` |
-| taken 时作废两条顺落指令 | `examples/hazard_flush.asm` → `0x00`（`fib.asm` 也考，但它同时依赖优先级 1，且这一项要第 8 步接上 `ClockEnable` 才判得动——更早的步骤里 `HLT` 停不下时钟，去掉修复输出不变） |
+| taken 时作废两条顺落指令 | `examples/hazard_flush.asm` → `0x00`（`jmp_reg.asm` → `0x00`、`subroutine.asm` → `0x0C` 也各带一组探针；`fib.asm` 也考，但它同时依赖优先级 1，且这一项要第 8 步接上 `ClockEnable` 才判得动——更早的步骤里 `HLT` 停不下时钟，去掉修复输出不变） |
+| `JMP Rs1` 的目标通路（目标 mux + 两处 flush 的选择端） | `examples/jmp_reg.asm` → `0x00`（五个失败值 `0x11`/`0x22`/`0x33`/`0x44`/`0x55` 各对应一处接错）；`examples/subroutine.asm` → `0x0C`（集成判据） |
+| 五条移位的通路（移位器、`S` 或门、`SLC`/`SRC` 的进位那两根线） | `examples/shift.asm` → `0x96`（四个失败值 `0x17` = `SRA` 填 0、`0xDE` = 移位器整条没接、`0xE1` = ≥8 没检测、`0x62` = 移位量取错地方）；`examples/shift_carry.asm` → `0x7E`（四个失败值 `0xFE`/`0x7D` = 字节顺序反了、`0xFD` = C 不通、`0x4E` = 方向接反） |
 
-**没有任何单个程序能覆盖全部 5 项**：第 7 步的总验收 = `hazard_branch` + `fib` + `square_lookup` + `hazard_flush`；要连 load→分支一起验再加 `hazard_loadbranch`，要单独分辨优先级 2 再加 `hazard_k2branch`。
+**没有任何单个程序能覆盖全部 5 项**：第 7 步的总验收 = `hazard_branch` + `fib` + `square_lookup` + `hazard_flush`；要连 load→分支一起验再加 `hazard_loadbranch`，要单独分辨优先级 2 再加 `hazard_k2branch`，要连 `JMP Rs1` 一起验再加 `jmp_reg` 与 `subroutine`。
 
 `hazard_k3.asm` 的失败值 `0x00` 成因不止一种——k=3 没修好、load-use 没停、前递优先级 1 或 2 没接——看到 `0x00` 时四项都要查。`hazard_loadbranch.asm` 的 `0x20` 有两种成因：load→分支没停，或前递优先级 2 没接。
 
@@ -123,6 +129,8 @@ WriteData = (MemWrite && BSrc) ? A_mux_out : B_mux_out   ; 选择端恰好只有
 - `hazard_branch.asm`：考前递优先级 1（03 的 `BZ`）与优先级 2（04 的 `OUT R3`），不含 k=3 / load-use / taken 作废。
 - `hazard_loadbranch.asm`：考 load→分支停顿与前递优先级 2 两项。
 - `add16.asm` / `sub16.asm`：刻意不考 k=3 / load-use / 分支，只依赖两个前递 mux，所以出错时可以先排除那几项冒险，直接查 C 逻辑与前递 mux。
+- `jmp_reg.asm` / `subroutine.asm`：两个都刻意不考 k=3 与前递优先级 2（间隔都是 1、4 或更远），出错时可以直接查 `op13` 接出去的那几根线；`subroutine.asm` 的两处失配（优先级 1、load-use）都表现为"无输出"，看显示屏不动时两处都要查。
+- `shift.asm` / `shift_carry.asm`：两个都刻意不考 k=3、load-use 与 taken 作废（源寄存器间隔都是 4 或更远，全文没有 load、没有分支），出错时可以直接盯着移位器与 C 查。它们仍各依赖一次前递优先级 1（折叠链上相隔 1 条的 `R7`），`shift_carry.asm` 另有相隔 2 条的两处、依赖优先级 2——那两条不通时也会算出别的值，不在两条程序的失败值表里。`shift.asm` 第 4 步就能跑（那时各级直连、没有冒险），`shift_carry.asm` 要第 8 步有 C 寄存器之后。
 
 **改示例或加示例后，必须用同一套方法重测这张表**：把每项修复分别去掉跑一遍，确认"该出错的出错、该通过的通过"。只数静态冒险间隔是不够的（见易错点 8）。
 

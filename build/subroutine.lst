@@ -1,0 +1,21 @@
+00  28F060          LDI R15, 0x60    ; SP
+01  28E007          LDI R14, r1      ; 返回地址
+02  281003          LDI R1, 3        ; dbl 翻倍两次后是 12
+03  287000          LDI R7, 0        ; 填充：把 01 的 R14 与 09 的 ST 拉开到 k=4
+04  900009          JMP outer
+05  177700          MOV R7, R7       ; 白取填充①（ID/EX 漏清才执行）
+06  177700          MOV R7, R7       ; 白取填充②（IF/ID 漏灌 0 才执行）
+07  A00100  r1:     OUT R1           ; 正解 0x0C
+08  B00000          HLT
+09  600FE0  outer:  ST  R14, [R15]   ; 压栈：outer 自己还要调用 dbl，先保住调用方的返回地址
+0A  20FF01          ADD R15, R15, #1 ; SP++
+0B  28E00D          LDI R14, o1      ; dbl 第一次返回后落在 o1
+0C  900012          JMP dbl
+0D  28E00F  o1:     LDI R14, o2      ; dbl 第二次返回后落在 o2
+0E  900012          JMP dbl
+0F  20FFFF  o2:     ADD R15, R15, #0xFF ; SP--
+10  50EF00          LD  R14, [R15]   ; 弹栈：取回调用方的返回地址
+11  D00E00          JMP R14          ; 返回
+12  101110  dbl:    ADD R1, R1, R1   ; 翻倍
+13  177700          MOV R7, R7       ; 填充：把 0B / 0D 的 LDI R14 与 14 的 JMP R14 都拉到 k=4
+14  D00E00          JMP R14          ; 返回

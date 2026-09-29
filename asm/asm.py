@@ -11,7 +11,7 @@
     <prefix>.mem  Logisim ROM 镜像（"v2.0 raw" 格式，可直接 Load Image）
 
 自检:
-    python asm.py --selftest   跑 20 条黄金字节断言 + 标签解析 + 边界检查，全部通过退出码 0
+    python asm.py --selftest   跑 33 条黄金字节断言 + 标签解析 + 边界检查，全部通过退出码 0
 
 编码规范见 docs/isa.md §4。
 """
@@ -29,6 +29,12 @@ import re
 OP_ALUR = 0x1
 (OP_ALUM, OP_LDA, OP_STA, OP_LD, OP_ST,
  OP_BZ, OP_BNZ, OP_JMP, OP_OUT, OP_HLT) = range(0x2, 0xC)
+# op=1100 是 LD 的偏移形式（LD Rd,[Rs1+#off]），与 LDA 同构：地址在 rs1 槽、偏移占满 [7:0]。
+# fn 槽按约定编 0，但这一条的 ALUop 由译码器造常量 ADD（不是 fn），见 docs/isa.md §8。
+OP_LD_OFF = 0xC
+# op=1101 是间接跳转 JMP Rs：目标地址来自寄存器（rs1 槽），fn 槽与 [7:0] 按约定编 0。
+# 它与 JMP addr 共用同一个助记符，靠操作数是不是寄存器记号区分（见 encode_instruction）。
+OP_JMP_REG = 0xD
 
 # 指令 ROM 容量（256×24）。PC 是 8 位，程序只能占 0x00–0xFF，超出的部分取不到。
 ROM_WORDS = 256
@@ -37,12 +43,19 @@ ROM_WORDS = 256
 FN_ADD, FN_ADC, FN_SUB, FN_SBC = 0, 1, 2, 3
 FN_AND, FN_OR, FN_XOR = 4, 5, 6
 FN_PASS_A, FN_PASS_B = 7, 8     # 直通：Result ← ALU.A / ALU.B
+# 移位五条（见 docs/isa.md §5）。SLL/SRL/SRA 的移位量取 B 口（Rs2 的值或 imm[7:0]），
+# 有效范围 0–7，≥8 有明确定义（不取模）；SLC/SRC 是进位链的一步，固定移 1 位、不吃 B。
+FN_SLL, FN_SRL, FN_SRA = 9, 10, 11
+FN_SLC, FN_SRC = 12, 13
 
-# 可作运算写在助记符里的 7 个功能（PASS 两个不直接暴露，由 MOV / LDI 用）
+# 可作运算写在助记符里的功能（PASS 两个不直接暴露，由 MOV / LDI 用；
+# SLC / SRC 只收 2 个操作数，另走一条分支）
 ALU_FN = {
     'ADD': FN_ADD, 'ADC': FN_ADC, 'SUB': FN_SUB, 'SBC': FN_SBC,
     'AND': FN_AND, 'OR': FN_OR, 'XOR': FN_XOR,
+    'SLL': FN_SLL, 'SRL': FN_SRL, 'SRA': FN_SRA,
 }
+
 
 # 寄存器记号：[rR] + 0–15
 REG_FULL_RE = re.compile(r'\s*[rR](1[0-5]|[0-9])\s*')
@@ -71,6 +84,23 @@ def parse_reg_bracketed(tok: str) -> int:
     if t.startswith('[') and t.endswith(']'):
         t = t[1:-1].strip()
     return parse_reg(t)
+
+
+def parse_mem_operand(tok: str, lineno=None) -> tuple[int, int]:
+    """解析 `[Rs1]` 或 `[Rs1+#off]`，返回 (rs1, off)；省略 `+#off` 时 off = 0。
+
+    偏移是无符号 8 位：没有符号扩展的硬件，写不出负偏移（要往前读就先把基址调小）。
+    """
+    t = tok.strip()
+    if not (t.startswith('[') and t.endswith(']')):
+        raise AsmError(f"内存操作数应为 [Rs1] 或 [Rs1+#off]，得到 '{tok}'", lineno)
+    inner = t[1:-1].strip()
+    if '+' in inner:
+        reg_part, _, off_part = inner.partition('+')
+        rs1 = parse_reg(reg_part)
+        off = check_u8(parse_num(off_part), "偏移量", lineno)
+        return rs1, off
+    return parse_reg(inner), 0
 
 
 def looks_like_reg(tok: str) -> bool:
@@ -112,6 +142,12 @@ def enc_alum(rd, rs1, imm, fn):
 def enc_mov(rd, rs1):          # PASS.A：Result ← Rs1，Rs2 填 0 被忽略
     return enc_alur(rd, rs1, 0, FN_PASS_A)
 
+def enc_slc(rd, rs1):          # 固定移 1 位、带进位左移，Rs2 填 0 被忽略
+    return enc_alur(rd, rs1, 0, FN_SLC)
+
+def enc_src(rd, rs1):          # 固定移 1 位、带进位右移，Rs2 填 0 被忽略
+    return enc_alur(rd, rs1, 0, FN_SRC)
+
 def enc_ldi(rd, imm):          # PASS.B：Result ← imm，Rs1 填 0 被忽略
     return enc_alum(rd, 0, imm, FN_PASS_B)
 
@@ -128,6 +164,9 @@ def enc_sta(rdata, addr):      # rdata = 数据寄存器（源）
 def enc_ld(rd, rs1):
     return (OP_LD << 20) | (rd << 12) | (rs1 << 8)
 
+def enc_ld_off(rd, rs1, off):  # 基址加偏移，off 恒非 0（+#0 由 enc_ld 收走）
+    return (OP_LD_OFF << 20) | (rd << 12) | (rs1 << 8) | off
+
 def enc_st(rdata, rs1):        # rdata = 数据寄存器（源）, rs1 = 地址寄存器
     return (OP_ST << 20) | (rs1 << 8) | (rdata << 4)
 
@@ -139,6 +178,9 @@ def enc_bnz(rs1, addr):
 
 def enc_jmp(addr):
     return (OP_JMP << 20) | addr
+
+def enc_jmp_reg(rs1):          # 间接跳转：目标在 rs1 [11:8]，[7:0] 编 0
+    return (OP_JMP_REG << 20) | (rs1 << 8)
 
 def enc_out(rs1):
     return (OP_OUT << 20) | (rs1 << 8)
@@ -153,7 +195,8 @@ def enc_hlt():
 def encode_instruction(mnemonic: str, ops: list[str], symbols, lineno=None) -> int:
     m = mnemonic.upper()
 
-    # ALU 族：ADD/ADC/SUB/SBC/AND/OR/XOR，第三个操作数决定寄存器型还是立即数型
+    # ALU 族：ADD/ADC/SUB/SBC/AND/OR/XOR/SLL/SRL/SRA，
+    # 第三个操作数决定寄存器型还是立即数型（移位量走的就是这一格）
     if m in ALU_FN:
         if len(ops) != 3:
             raise AsmError(f"{m} 需要 3 个操作数（Rd, Rs1, Rs2 或 #imm）", lineno)
@@ -165,6 +208,13 @@ def encode_instruction(mnemonic: str, ops: list[str], symbols, lineno=None) -> i
         imm = check_u8(parse_num(ops[2]), "立即数", lineno)
         return enc_alum(rd, rs1, imm, fn)
 
+    # SLC / SRC 固定移 1 位，不收移位量
+    if m in ('SLC', 'SRC'):
+        if len(ops) != 2:
+            raise AsmError(f"{m} 需要 2 个操作数（Rd, Rs1）；移位量固定为 1", lineno)
+        enc = enc_slc if m == 'SLC' else enc_src
+        return enc(parse_reg(ops[0]), parse_reg(ops[1]))
+
     if m == 'MOV':
         if len(ops) != 2:
             raise AsmError("MOV 需要 2 个操作数（Rd, Rs1）", lineno)
@@ -174,34 +224,38 @@ def encode_instruction(mnemonic: str, ops: list[str], symbols, lineno=None) -> i
         if len(ops) != 2:
             raise AsmError("LDI 需要 2 个操作数（Rd, #imm）", lineno)
         rd = parse_reg(ops[0])
-        imm = check_u8(parse_num(ops[1]), "立即数", lineno)
+        imm = resolve_u8(ops[1], symbols, "立即数", lineno)
         return enc_ldi(rd, imm)
 
     if m == 'LDA':
         if len(ops) != 2:
             raise AsmError("LDA 需要 2 个操作数（Rd, addr）", lineno)
         rd = parse_reg(ops[0])
-        addr = check_u8(parse_num(ops[1]), "地址", lineno)
+        addr = resolve_u8(ops[1], symbols, lineno=lineno)
         return enc_lda(rd, addr)
 
     if m == 'STA':
         if len(ops) != 2:
             raise AsmError("STA 需要 2 个操作数（数据源, addr）", lineno)
         rdata = parse_reg(ops[0])
-        addr = check_u8(parse_num(ops[1]), "地址", lineno)
+        addr = resolve_u8(ops[1], symbols, lineno=lineno)
         return enc_sta(rdata, addr)
 
     if m == 'LD':
         if len(ops) != 2:
-            raise AsmError("LD 需要 2 个操作数（Rd, [Rs1]）", lineno)
+            raise AsmError("LD 需要 2 个操作数（Rd, [Rs1] 或 [Rs1+#off]）", lineno)
         rd = parse_reg(ops[0])
-        rs1 = parse_reg_bracketed(ops[1])
-        return enc_ld(rd, rs1)
+        rs1, off = parse_mem_operand(ops[1], lineno)
+        # `+#0` 归普通 LD：一个操作只留一个机器码，两种形式不在镜像里并存
+        return enc_ld(rd, rs1) if off == 0 else enc_ld_off(rd, rs1, off)
 
     if m == 'ST':
         if len(ops) != 2:
             raise AsmError("ST 需要 2 个操作数（数据源, [地址寄存器]）", lineno)
         rdata = parse_reg(ops[0])
+        if '+' in ops[1]:
+            raise AsmError(
+                "ST 没有偏移形式（只有 LD 有）；要写 [Rs1+#off] 先用 ADD 算出地址", lineno)
         rs1 = parse_reg_bracketed(ops[1])
         return enc_st(rdata, rs1)
 
@@ -209,21 +263,24 @@ def encode_instruction(mnemonic: str, ops: list[str], symbols, lineno=None) -> i
         if len(ops) != 2:
             raise AsmError("BZ 需要 2 个操作数（Rs1, addr）", lineno)
         rs1 = parse_reg(ops[0])
-        addr = resolve_target(ops[1], symbols, lineno)
+        addr = resolve_u8(ops[1], symbols, lineno=lineno)
         return enc_bz(rs1, addr)
 
     if m == 'BNZ':
         if len(ops) != 2:
             raise AsmError("BNZ 需要 2 个操作数（Rs1, addr）", lineno)
         rs1 = parse_reg(ops[0])
-        addr = resolve_target(ops[1], symbols, lineno)
+        addr = resolve_u8(ops[1], symbols, lineno=lineno)
         return enc_bnz(rs1, addr)
 
     if m == 'JMP':
         if len(ops) != 1:
-            raise AsmError("JMP 需要 1 个操作数（addr）", lineno)
-        addr = resolve_target(ops[0], symbols, lineno)
-        return enc_jmp(addr)
+            raise AsmError("JMP 需要 1 个操作数（addr 或 Rs）", lineno)
+        # 操作数是寄存器记号 → 间接跳转；否则是绝对地址（标签或数值）。
+        # 代价是一个叫 R1 之类的标签会被当成寄存器，写标签时避开寄存器名即可。
+        if looks_like_reg(ops[0]):
+            return enc_jmp_reg(parse_reg(ops[0]))
+        return enc_jmp(resolve_u8(ops[0], symbols, lineno=lineno))
 
     if m == 'OUT':
         if len(ops) != 1:
@@ -238,14 +295,18 @@ def encode_instruction(mnemonic: str, ops: list[str], symbols, lineno=None) -> i
     raise AsmError(f"未知助记符 '{mnemonic}'", lineno)
 
 
-def resolve_target(tok: str, symbols, lineno=None) -> int:
-    """分支/跳转目标：标签或数值。"""
+def resolve_u8(tok: str, symbols, what="地址", lineno=None) -> int:
+    """标签或数值 → 0–255。
+
+    标签一律解析成它在 ROM 里的地址，所以 `LDI Rd,label` / `LDA Rd,label` /
+    `STA Rs,label` 与 `BZ` / `BNZ` / `JMP` 用的是同一条规则：标签写在哪儿都指地址。
+    """
     t = tok.strip()
     if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', t):
         if t not in symbols:
             raise AsmError(f"未定义的标签 '{t}'", lineno)
         return check_u8(symbols[t], f"标签 '{t}' 的地址", lineno)
-    return check_u8(parse_num(t), "地址", lineno)
+    return check_u8(parse_num(t), what, lineno)
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +427,7 @@ def assemble_snippet(text: str) -> list[int]:
 
 
 def selftest() -> int:
-    # 20 条断言：覆盖全部 11 个 opcode 与全部 9 个 fn。
+    # 33 条断言：覆盖全部 13 个 opcode 与全部 14 个 fn。
     # 十六进制逐位对应 op|fn|rd|rs1|rs2/imm，读得出来才算钉死。
     # 两条 store 是唯一的例外：数据源占的是自己的源槽（STA→rs1、ST→rs2），rd 槽恒 0。
     cases = [
@@ -383,14 +444,30 @@ def selftest() -> int:
         ("ADC R15, R0, 0xFF", 0x21F0FF),   # `#` 可省；R15/R0 合法
         ("LDI R1, 5",        0x281005),
         ("LDI R2, 0b1010",   0x28200A),
+        # ---- 移位（fn 9–13）：SLL/SRL/SRA 的移位量占第三格，SLC/SRC 固定 1 位 ----
+        ("SLL R1, R2, R3",   0x191230),   # 移位量也可以从寄存器来
+        ("SRL R1, R2, R3",   0x1A1230),
+        ("SRA R1, R2, R3",   0x1B1230),
+        ("SLC R1, R2",       0x1C1200),   # 只收 2 个操作数，rs2 槽编 0
+        ("SRC R1, R2",       0x1D1200),
+        ("SLL R1, R2, #3",   0x291203),   # 立即数型：移位量整格占 [7:0]
+        ("SRA R7, R1, #200", 0x2B71C8),   # 量化成 0–7 是硬件的事，编码照样收 8 位
         # ---- 访存 / 分支 / 其它 ----
         ("LDA R1, 0x2A",     0x30102A),
         ("STA R1, 0x2A",     0x40012A),   # 数据源 R1 在 [11:8]，rd 槽编 0
         ("LD R2, [R3]",      0x502300),
+        # ---- LD 偏移型（op=1100）：与 LDA 同构，偏移占满 [7:0] ----
+        ("LD R2, [R3+#4]",   0xC02304),
+        ("LD R15, [R0+#0x2A]", 0xC0F02A),  # 偏移可写十六进制，`#` 可省
+        ("LD R8, [R9+#255]", 0xC089FF),    # 偏移上限
+        ("LD R2, [R3+#0]",   0x502300),    # 归普通 LD：一个操作只留一个机器码
         ("ST R2, [R3]",      0x600320),   # 地址 R3 在 [11:8]，数据源 R2 在 [7:4]，rd 槽编 0
         ("BZ  R1, 0x10",     0x700110),
         ("BNZ R1, 0x10",     0x800110),
         ("JMP 0x00",         0x900000),
+        # ---- 间接跳转（op=1101）：目标在 rs1 槽，[7:0] 编 0 ----
+        ("JMP R1",           0xD00100),
+        ("JMP R15",          0xD00F00),
         ("OUT R15",          0xA00F00),
         ("HLT",              0xB00000),
     ]
@@ -424,6 +501,49 @@ def selftest() -> int:
         print(f"FAIL  标签解析异常: {e}")
         failures += 1
 
+    # 标签也能当立即数 / 地址用（子程序调用约定靠它写返回地址）
+    try:
+        words = assemble_snippet(
+            "       LDI R1, data\n"
+            "       LDA R2, data\n"
+            "       STA R3, data\n"
+            "       JMP data\n"
+            "data:  HLT\n"
+        )
+        assert words[0] == enc_ldi(1, 4), f"LDI 标签错误: {words[0]:06X}"
+        assert words[1] == enc_lda(2, 4), f"LDA 标签错误: {words[1]:06X}"
+        assert words[2] == enc_sta(3, 4), f"STA 标签错误: {words[2]:06X}"
+        assert words[3] == enc_jmp(4), f"JMP 标签错误: {words[3]:06X}"
+        print("ok    标签作立即数 / 地址 (data → 0x04)")
+    except AsmError as e:
+        print(f"FAIL  标签作立即数异常: {e}")
+        failures += 1
+
+    # JMP 的两种形式：操作数是寄存器记号 → 间接，否则是地址
+    try:
+        words = assemble_snippet(
+            "       JMP R1\n"
+            "       JMP tgt\n"
+            "       JMP 0x20\n"
+            "tgt:   HLT\n"
+        )
+        assert words[0] == enc_jmp_reg(1), f"JMP Rs 错误: {words[0]:06X}"
+        assert words[1] == enc_jmp(3), f"JMP 标签错误: {words[1]:06X}"
+        assert words[2] == enc_jmp(0x20), f"JMP 数值错误: {words[2]:06X}"
+        print("ok    JMP 间接 / 标签 / 数值 三种写法分派")
+    except AsmError as e:
+        print(f"FAIL  JMP 分派异常: {e}")
+        failures += 1
+
+    for bad, why in [("JMP nosuch", "未定义的跳转标签"),
+                     ("LDI R1, nosuch", "未定义的立即数标签")]:
+        try:
+            assemble_snippet(bad)
+            print(f"FAIL  {why}未报错: {bad}")
+            failures += 1
+        except AsmError as e:
+            print(f"ok    {why}被拒（{e}）")
+
     # 第三个操作数是寄存器还是立即数——两条路径必须给出不同机器码
     try:
         reg = assemble_snippet("ADD R1, R2, R3")[0]
@@ -434,6 +554,28 @@ def selftest() -> int:
     except AsmError as e:
         print(f"FAIL  分派测试异常: {e}")
         failures += 1
+
+    # LD 偏移型的两条边界：偏移越界要报错，ST 不认偏移形式（要报错、别静默当 [Rs1] 用）
+    try:
+        assert assemble_snippet("LD R1, [R2+#0]")[0] == enc_ld(1, 2), "偏移 0 未归普通 LD"
+        print("ok    LD +0 归普通 LD")
+    except AsmError as e:
+        print(f"FAIL  LD +0 归普通 LD 异常: {e}")
+        failures += 1
+
+    for bad, why in [("LD R1, [R2+#256]", "偏移越界"),
+                     ("LD R1, [R2+#-1]", "负偏移"),
+                     ("ST R1, [R2+#1]", "ST 的偏移形式"),
+                     ("SLC R1, R2, R3", "SLC 的第三操作数"),
+                     ("SRC R1, R2, 1", "SRC 的第三操作数"),
+                     ("SLL R1, R2", "SLL 缺移位量"),
+                     ("SLL R1, R2, #256", "移位量越界")]:
+        try:
+            assemble_snippet(bad)
+            print(f"FAIL  {why}未报错: {bad}")
+            failures += 1
+        except AsmError as e:
+            print(f"ok    {why}被拒（{e}）")
 
     # 边界：正好 ROM_WORDS 条要能过，多一条要报错（PC 只有 8 位）
     try:

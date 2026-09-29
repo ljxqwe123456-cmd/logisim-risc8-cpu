@@ -4,7 +4,7 @@
 
 规格：8 位数据通路、24 位定长指令、16 个通用寄存器（R0–R15，没有恒零寄存器）、Harvard（指令 ROM 256×24 与数据 RAM 256×8 分离）、五级流水 IF/ID/EX/MEM/WB。
 
-**完成状态**：整机已搭完并验过——`docs/datapath.md` §8 的八步全部走完，下面判据表里 13 个程序全部通过，`cpu.circ` 就是这一版。下面的搭建顺序与调试要点仍然是自建时的完整指南。
+**完成状态**：整机已搭完并验过——`docs/datapath.md` §8 的八步全部走完，下面判据表里 18 个程序全部通过，`cpu.circ` 就是这一版。下面的搭建顺序与调试要点仍然是自建时的完整指南。
 
 ## 目录结构
 
@@ -20,7 +20,7 @@ docs/
   CHANGELOG.md    两份文档的历史改动记录
 asm/
   asm.py          Python 汇编器（源码 → .lst 清单 + .mem ROM 镜像）
-examples/         13 个测试程序（.asm，含 6 个 hazard_* 冒险专项自测）
+examples/         18 个测试程序（.asm，含 6 个 hazard_* 冒险专项自测）
 build/            汇编产物（每个示例一对 .lst + .mem）
 ```
 
@@ -51,7 +51,7 @@ build/            汇编产物（每个示例一对 .lst + .mem）
 # 汇编一个程序（生成 build\fib.lst 和 build\fib.mem）
 python asm\asm.py examples\fib.asm build\fib
 
-# 跑自检（20 条黄金字节断言 + 标签解析 + 边界检查，全部通过退出码 0）
+# 跑自检（33 条黄金字节断言 + 标签解析 + 边界检查，全部通过退出码 0）
 python asm\asm.py --selftest
 ```
 
@@ -68,11 +68,11 @@ python asm\asm.py --selftest
 2. 右键 ROM → Load Image → 选对应的 `.mem` 文件。
 3. 单步或连续时钟，观察 PC、各流水线寄存器、寄存器堆、OUT 的 LED 序列。
 
-> 24 位的 ROM 吃不吃得下 6 位十六进制的字，本仓库已经验过了：`cpu.circ` 里那个 ROM 就是 Data Bit Width = 24、地址位宽用默认的 8，`build/` 下 13 个 `.mem` 全部按这个格式载入并跑通过。
+> 24 位的 ROM 吃不吃得下 6 位十六进制的字，本仓库已经验过了：`cpu.circ` 里那个 ROM 就是 Data Bit Width = 24、地址位宽用默认的 8，`build/` 下 18 个 `.mem` 全部按这个格式载入并跑通过。
 
 ### 3. 验证程序输出
 
-每个程序第一次应该跑通的 `datapath.md` §8 步骤见下表「验证时机」列（`hazard_k3` 要在第 1 步的下降沿、第 6 步的前递、第 7 步的 Hazard Unit 三件套齐了之后才对）。行序与 §8 的搭建顺序无关，按「验证时机」列挑程序：排在第 2 行的 `hazard_k3` 从第 1 步起就要反复用，排在第 1 行的 `hazard_branch` 反而要等到第 7 步；表里最早能跑的是排在第 13 行的 `hazard_k2`（不用分支也不用 OUT，第 6 步前递 mux 搭好就能跑）。每个 `.asm` 文件头也写了同样一行。
+每个程序第一次应该跑通的 `datapath.md` §8 步骤见下表「验证时机」列（`hazard_k3` 要在第 1 步的下降沿、第 6 步的前递、第 7 步的 Hazard Unit 三件套齐了之后才对）。行序与 §8 的搭建顺序无关，按「验证时机」列挑程序：排在第 2 行的 `hazard_k3` 从第 1 步起就要反复用，排在第 1 行的 `hazard_branch` 反而要等到第 7 步；表里最早能跑的是排在第 14 行的 `ld_offset` 与第 17 行的 `shift`（第 4 步译码器搭完就能跑出正解）；排在第 13 行的 `hazard_k2` 不用分支也不用 OUT，第 6 步前递 mux 搭好就能跑。每个 `.asm` 文件头也写了同样一行。
 
 ## 程序判据表
 
@@ -91,8 +91,13 @@ python asm\asm.py --selftest
 | 11 | `sub16.asm` | §8 第 8 步 | SUB/SBC 多字节：`0x0200 - 0x0001 = 0x01FF`（借位）。无 k=3、无 load-use、无分支，验借位时不会混进别的问题 |
 | 12 | `step5_smoke.asm` | §8 第 5 步 | 流水线骨架贯通冒烟。结果不在 OUT 而在 RAM：`0x10`-`0x13` = `11 22 33 44`、`0x14` = `07`、`0x20` = `11`。不含任何冒险，前递 / 停顿 / 分支都还没搭就能跑；主查寄存器堆写地址有没有从单周期版本的 `Inst[15:12]` 改接 `MEM/WB.rd`（§2.1） |
 | 13 | `hazard_k2.asm` | §8 第 6 步 | 冒险自测：间隔 2 条的 RAW，判据是前递优先级 2（`MEM/WB` 那一路，`datapath.md` §4）。结果不在 OUT 而在 RAM：`0x40` = `0xA1`（STA 数据源走 A 口）、`0x41` = `0xB2`（ST 数据源走 B 口）、`0x42` = `0x2A`（ADD 结果经 A 口）。不需要停顿 / 分支 / OUT |
+| 14 | `ld_offset.asm` | §8 第 4 步 | 基址加偏移寻址 `LD Rd,[Rs1+#off]` 的地址通路，OUT = `0x33`。正解与两个失败值互不相同：`0x11` = 偏移没加上（`ALUop` 第三级 mux 或 `BSrc` 的 `op12` 项漏接）、`0x00` = 前递没接。刻意不考 k=3 / load-use / taken 作废，出错时可直接查译码器上新加的那几项（`datapath.md` §9 第 15 条） |
+| 15 | `jmp_reg.asm` | §8 第 7 步 | 间接跳转 `JMP Rs1` 的目标通路，OUT = `0x00`。五个失败值互不相同：`0x11` / `0x22` = 两处 flush 的选择端漏了 `JumpReg`、`0x33` = 根本没跳、`0x44` = 目标 mux 接 `A_mux_out` 的那一侧没接、`0x55` = A 前递 mux 少了优先级 1。刻意不考 k=3 / load-use / 优先级 2（`datapath.md` §9 第 16 条） |
+| 16 | `subroutine.asm` | §8 第 7 步 | 调用约定（R14 = 链接寄存器、R15 = 栈指针）的集成判据，OUT = `0x0C`：`dbl` 被调用两次，R1 从 3 翻到 12。失败值只有 `0x03`（taken 那两条顺落指令漏作废）与"无输出"（`JMP R14` 拿到 0）两种 |
+| 17 | `shift.asm` | §8 第 2/4 步 | 三条逻辑移位（`SLL`/`SRL`/`SRA`）的通路，OUT = `0x96`。四个失败值互不相同：`0x17` = `SRA` 的填位接成 0、`0xDE` = 移位器整条没接上（`fn` 9-11 漏译，`ALUop` 落回 `PASS.A`）、`0xE1` = ≥8 的检测没接（`#8` 被当成移 0 位）、`0x62` = 移位控制接在 `BSrc` 之前（立即数型拿不到移位量）。其中 `#8` 那两条专验五输入或门（`datapath.md` §9 第 18 条） |
+| 18 | `shift_carry.asm` | §8 第 8 步 | 两条带进位移位（`SLC`/`SRC`）的通路，OUT = `0x7E`。它验的是 16 位进位链的字节顺序与 C 这条线：`0xFE` = 右移那组两条反了、`0x7D` = 左移那组两条反了、`0xFD` = C 整条不通（读不到或写不进，症状一样）、`0x4E` = 两条的方向整体接反（`datapath.md` §9 第 18 条） |
 
-13 个程序里有 12 个含冒险，但"含冒险"不等于"能当判据"——有 4 处是假通过：把对应的修复去掉，程序照样跑、输出一个字都不差。`step5_smoke.asm` 是唯一一个不含冒险的，它验的是搭建进度而不是某项修复，别拿它当任何一项的判据。
+18 个程序里有 17 个含冒险，但"含冒险"不等于"能当判据"——有 4 处是假通过：把对应的修复去掉，程序照样跑、输出一个字都不差。`step5_smoke.asm` 是唯一一个不含冒险的，它验的是搭建进度而不是某项修复，别拿它当任何一项的判据。`shift.asm` 与 `shift_carry.asm` 只用到 ALU 与 `OUT`，刻意把 k=3、load-use、taken 作废都避开，出错时可以直接盯着移位器与 C 查。
 
 ## 判据可用性
 
@@ -117,13 +122,18 @@ python asm\asm.py --selftest
 | `add16.asm` / `sub16.asm` | — | 有效 | 有效 | — | — |
 | `step5_smoke.asm` | — | — | — | — | — |
 | `hazard_k2.asm` | — | — | 有效 | — | — |
+| `ld_offset.asm` | — | 有效 | — | — | — |
+| `jmp_reg.asm` | — | 有效 | — | — | 有效 |
+| `subroutine.asm` | — | 有效 | — | 有效 | 有效 |
+| `shift.asm` | — | 有效 | — | — | — |
+| `shift_carry.asm` | — | 有效 | 有效 | — | — |
 
 前递那两列指的是"那一级 mux 根本没接"，A 口与 B 口各有一个 mux、各有优先级 1/2 两路；程序考的是哪一侧，见 `datapath.md` §9 第 2 / 9 / 11 条与各文件头。
 
 四个直接可用的结论：
 
 - `sum1to10.asm` 与 `array_sum.asm` 的分支那两格大多是假通过：循环多跑一轮时加的是 0，taken 漏作废时多执行的那条顺落指令也改不了最后那次输出。拿它们验分支接线会漏掉 bug。
-- 没有任何单个程序能覆盖全部 5 项：k=3 只有 `hazard_k3` / `sum1to10` / `array_sum` 考，load-use 的首选是 `square_lookup`，A 前递 mux 的两级是 `hazard_branch` + `hazard_k2branch`，taken 作废两条的单独判据只有 `hazard_flush`。第 7 步的总验收 = `hazard_branch` + `fib` + `square_lookup` + `hazard_flush`。
+- 没有任何单个程序能覆盖全部 5 项：k=3 只有 `hazard_k3` / `sum1to10` / `array_sum` 考，load-use 的首选是 `square_lookup`，A 前递 mux 的两级是 `hazard_branch` + `hazard_k2branch`，taken 作废两条的单独判据只有 `hazard_flush`。第 7 步的总验收 = `hazard_branch` + `fib` + `square_lookup` + `hazard_flush`；要连 `JMP Rs1` 一起验再加 `jmp_reg` 与 `subroutine`。
 - `hazard_loadbranch.asm` 的 `0x20` 有两种成因：load→分支没停，或者前递优先级 2 没接（停完那一拍 load 正好落在 `MEM/WB`，取不到它就只能读到旧的 R3=0）。看到 `0x20` 时两处都要查。
 - `hazard_k3.asm` 的 `0x00` 成因更多：k=3 没修好、load-use 没停、前递优先级 1 或 2 没接，都会得到它（`07` 的 `OUT` 拿不到 `06` 那条 `LDA` 的结果时读回的 R4 是 0）。看到 `0x00` 时四项都要查。
 
@@ -135,7 +145,8 @@ python asm\asm.py --selftest
 | §4 前递优先级 1（`EX/MEM` 那一路） | `hazard_branch.asm`（`fib.asm` 同效；A 口）或 `hazard_k3.asm`（B 口，`ST` 的数据源） | `hazard_branch`：`0x10`（正解 `5`）；`fib`：序列末项 `0x59` 而非 `55`；`hazard_k3`：`0x00` |
 | §4 前递优先级 2（`MEM/WB` 那一路） | `hazard_k2.asm`（专为它写的，走 store 与 ALU，不用分支也不用 OUT）或 `hazard_k2branch.asm`（A 口）或 `hazard_branch.asm` 的 04、`hazard_loadbranch.asm` 的 03；`sum1to10.asm` / `array_sum.asm` 的循环体也吃这一级 | `hazard_k2`：RAM 三格都是 `0x0F`（正解 `0xA1` / `0xB2` / `0x2A`）；`hazard_k2branch`：`0x10`；`hazard_branch`：`0x00`；`hazard_loadbranch`：`0x20`（正解都是 `5` / `0x05`）；`sum1to10`：循环停不下来，一个值都不输出；`array_sum`：`0x19` |
 | §5.2 load-use 停顿 | `square_lookup.asm`（`hazard_k3.asm` 同效） | `0x00`（正解 `9`） |
-| §5.1 taken 时作废两条顺落指令 | `hazard_flush.asm`（`fib.asm` 也考，但它同时依赖前递优先级 1，且这一项要第 8 步起才判得动） | `hazard_flush`：`0x11` 或 `0x22`（正解 `0x00`）；`fib`：只输出一次 `1` 就 HLT（正解 10 个数）——第 8 步接上 `ClockEnable` 之后才看得见 |
+| §5.1 taken 时作废两条顺落指令 | `hazard_flush.asm`（`jmp_reg.asm` 与 `subroutine.asm` 也各带一组探针；`fib.asm` 也考，但它同时依赖前递优先级 1，且这一项要第 8 步起才判得动） | `hazard_flush`：`0x11` 或 `0x22`（正解 `0x00`）；`jmp_reg`：`0x11` 或 `0x22`（正解 `0x00`）；`subroutine`：`0x03`（正解 `0x0C`）；`fib`：只输出一次 `1` 就 HLT（正解 10 个数）——第 8 步接上 `ClockEnable` 之后才看得见 |
+| `JMP Rs1` 的目标通路（§2.6 目标 mux + 两处 flush 的选择端） | `jmp_reg.asm`（独立判据）；`subroutine.asm` 是它的集成判据 | `jmp_reg`：`0x11` / `0x22` / `0x33` / `0x44` / `0x55`（正解 `0x00`，五个值各对应一处接错）；`subroutine`：`0x03` 或"无输出"（正解 `0x0C`） |
 
 ## 四处假通过是怎么发生的
 
