@@ -1,12 +1,13 @@
 # CLAUDE.md
 
-8 位 RISC CPU（Logisim-Evolution，五级流水线）。
+8 位 RISC CPU（原版 Logisim 2.7.1 手工搭建，五级流水线）。文档里的元件名按原版：移位元件叫 `Shifter`（不是 Logisim-Evolution 的 `Barrel Shifter`），工具就是仓库根目录那个 `logisim-generic-2.7.1.jar`。
 
 ## 这个仓库里有什么 / 没有什么
 
 **交付物是设计文档 + Python 汇编器 + 测试程序，外加一份搭好的电路 `cpu.circ`。** 电路由人手工在 Logisim 里搭。
 
 - `cpu.circ`（仓库根目录）由人手工在 Logisim 里维护：不要由你生成，也不要改它的内容。文档与它不一致时，改文档或提醒作者改电路，别自己动电路文件。
+- **`cpu.circ` 停在扩展前那一版**：`LD Rd,[Rs1+#off]`（`op=1100`）、`JMP Rs1`（`op=1101`）与五条移位（`fn=1001`-`1101`）在文档里有规格、电路没搭——译码器只译到 `op=1010`，`8bit_ALU` 里没有移位器。`examples/` 里 `ld_offset` / `jmp_reg` / `subroutine` / `shift` / `shift_carry` 这 5 个在它上面跑不出正解，其余 13 个正常。别因为文档里写了这五条移位就以为电路里也有。
 - 你的活通常是：改规格文档、改汇编器、加/改测试程序、核对文档与实现是否自洽。
 - `build/` 是汇编产物（生成物，可随时重建；不要手改）。
 - 仓库是 git 仓库（`main` 分支），`build/` 已纳入版本控制——重新汇编后 `git status` 干净就说明机器码没变。
